@@ -88,7 +88,16 @@ This document implements the "Correct First" approach for estimating PTM feature
 
 # Data Loading
 
+The three inputs of this analysis are loaded here: the sample annotation that defines the
+groups and contrasts, the normalized protein abundances from the total-proteome DEA run,
+and the normalized phosphosite abundances from the phospho DEA run. All three come from
+runs that already happened; nothing is re-quantified in this report.
+
 ## Project Setup
+
+Reads the sample annotation and creates the output directory. The annotation is the
+control file of the analysis: its grouping column becomes the model term and its contrast
+definitions become the comparisons evaluated further below.
 
 ```{r defineParameters}
 source(params$utils_script)
@@ -102,25 +111,46 @@ if (!dir.exists(res_dir)) {
 }
 
 # Load annotation from direct path
-cat("Loading annotation from:", params$annot_file, "\n")
 annot <- readr::read_tsv(params$annot_file, show_col_types = FALSE)
-knitr::kable(head(annot), caption = "Sample annotation")
+knitr::kable(
+  head(annot),
+  caption = paste0(
+    "First rows of the sample annotation driving this CorrectFirst analysis: one row per ",
+    "sample, with the grouping columns that define the linear model and the contrasts ",
+    "evaluated further below."
+  )
+)
 ```
 
+The annotation was read from `` `r basename(params$annot_file)` ``.
+
 ## Load Normalized Total Proteome Abundances
+
+Loads the protein-level abundances that serve as the correction baseline. Reverse (decoy)
+entries are removed and identifiers canonicalized so that sites and proteins can be
+matched in the next step.
 
 ```{r loadNormalizedAbundances}
 # Load from direct DEA directory path
 ldata <- arrow::read_parquet(get_dea_parquet(params$protein_dea_dir))
-ldata <- ldata |> filter(!grepl("^rev_", protein_Id))
+ldata <- ldata |>
+  filter(!grepl("^rev_", protein_Id)) |>
+  canonicalize_uniprot_ids()
+protein_sample_col <- get_dea_sample_name_column(params$protein_dea_dir)
 
 tot_d <- ldata |>
-  dplyr::select(Name, protein_Id, normalized_abundance)
+  dplyr::select(tidyselect::all_of(protein_sample_col), protein_Id,
+                normalized_abundance)
 
-cat("Loaded", nrow(tot_d), "normalized protein abundance measurements\n")
+n_protein_measurements <- nrow(tot_d)
 ```
 
+`r format(n_protein_measurements, big.mark = ",")` normalized protein abundance
+measurements were loaded.
+
 ## Load Normalized Single-Site Abundances
+
+Loads the site-level abundances, the quantity whose usage is being tested.
 
 ```{r loadNormalizedSiteAbundances}
 # Load from direct DEA directory path
@@ -128,8 +158,12 @@ ldata <- arrow::read_parquet(get_dea_parquet(params$phospho_dea_dir))
 list <- yaml::read_yaml(get_dea_yaml(params$phospho_dea_dir))
 config <- prolfqua::list_to_AnalysisConfiguration(list)
 ptm_data <- prolfqua::LFQData$new(ldata, config)
-cat("Loaded", nrow(ptm_data$get_data()), "normalized PTM site abundance measurements\n")
+ptm_sample_col <- get_dea_sample_name_column(params$phospho_dea_dir)
+n_site_measurements <- nrow(ptm_data$data_long())
 ```
+
+`r format(n_site_measurements, big.mark = ",")` normalized phosphosite abundance
+measurements were loaded.
 
 # Protein Normalization
 
@@ -138,21 +172,28 @@ cat("Loaded", nrow(ptm_data$get_data()), "normalized PTM site abundance measurem
 Correct PTM abundances by subtracting protein abundances (on log scale this is equivalent to dividing).
 
 ```{r correctData}
+sample_join <- stats::setNames(protein_sample_col, ptm_sample_col)
+join_columns <- c(sample_join, protein_Id = "protein_Id")
+
 ptm_data$set_data(dplyr::inner_join(
-  ptm_data$get_data(), tot_d,
-  by = c("Name", "protein_Id"),
+  ptm_data$data_long(), tot_d,
+  by = join_columns,
   suffix = c(".site", ".total")
 ))
 
-ptm_data$set_data(ptm_data$get_data() |>
+ptm_data$set_data(ptm_data$data_long() |>
   dplyr::mutate(ptm_usage = normalized_abundance.site - normalized_abundance.total))
 
-cat("Merged data contains", nrow(ptm_data$get_data()), "measurements\n")
+n_merged_measurements <- nrow(ptm_data$data_long())
 ```
+
+Joining sites to their proteins leaves `r format(n_merged_measurements, big.mark = ",")`
+measurements that carry both a site and a protein value and can therefore be corrected;
+sites whose protein was not quantified drop out here.
 
 ```{r correctDataWrite}
 ptm_data$get_config()$set_response("ptm_usage")
-wide <- ptm_data$to_wide()
+wide <- ptm_data$data_wide()
 wide_data <- prolfqua::separate_hierarchy(wide$data, ptm_data$get_config())
 writexl::write_xlsx(wide_data, file.path(res_dir, "CorrectFirst_intensities_wide.xlsx"))
 writexl::write_xlsx(wide$annotation, file.path(res_dir, "CorrectFirst_intensities_file_annotation.xlsx"))
@@ -160,32 +201,47 @@ writexl::write_xlsx(wide$annotation, file.path(res_dir, "CorrectFirst_intensitie
 
 ## Visualize Corrected PTM Usage
 
-```{r fig1densityCorrected, fig.cap="Density plot of the total proteome corrected PTM site abundances."}
+```{r fig1densityCorrected, fig.cap="Distribution of the protein-corrected phosphosite abundances, one curve per sample. The x-axis is the corrected abundance on log2 scale (site abundance minus the abundance of its protein in the same sample, shifted by a constant to keep values positive) and the y-axis its density. Curves that overlay each other indicate comparable correction across samples; a shifted or differently shaped curve marks a sample whose correction behaves differently and that will influence the model."}
 ptm_data$get_config()$set_response("ptm_usage")
 pl <- ptm_data$get_Plotter()
-ptm_data$get_config()$get_response()
-ptm_data$set_data(ptm_data$get_data() |>
+ptm_data$set_data(ptm_data$data_long() |>
   dplyr::mutate(ptm_usage = ptm_usage + 20))
 pl$intensity_distribution_density()
 
 ```
 
-```{r pca, fig.cap="Corrected PTM site abundances PCA plot."}
-pl$pca_plotly() |> plotly::layout(width = 600, height = 500)
+```{r pca, fig.cap="Principal component analysis of the protein-corrected phosphosite abundances. Each point is one sample positioned by its first two principal components, coloured by experimental group and labelled with the sample name. Missing values are imputed for this projection only, not for the statistical model. Samples of the same group clustering together indicates that PTM usage separates the conditions; an outlying sample is a candidate explanation for weak contrasts."}
+pca_data <- prolfqua::AggregateLimpa$new(
+  ptm_data,
+  impute_only = TRUE
+)$aggregate()
+pca_data$get_Plotter()$pca()
 ```
 
 # Statistical Modeling
 
+The corrected usage values are now treated as an ordinary response: one linear model per
+phosphosite, then the contrasts of interest evaluated on those models. Because the
+correction already happened, no protein-level adjustment is applied afterwards.
+
 ## Fit Linear Model
+
+Fits `ptm_usage ~ G_` per site, that is one group effect per experimental group.
 
 ```{r fitModelToCorrected}
 strategy_lm <- prolfqua::strategy_lm("ptm_usage ~ G_")
 models <- prolfqua::build_model(data = ptm_data, model_strategy = strategy_lm)
-cat("Built models for", length(models$modeldf), "PTM sites\n")
+n_models <- nrow(models$model_df)
 
 ```
 
+One model was fitted per phosphosite, `r format(n_models, big.mark = ",")` in total.
+
 ## Define Contrasts
+
+Determines which group comparisons to evaluate. Two annotation styles are accepted: an
+explicit one carrying `Contrast` and `ContrastName` columns, or a dataset style carrying
+`Group` and `Control`, from which every treatment-versus-control pair is generated.
 
 ```{r defineContrasts}
 # Support two annotation formats:
@@ -197,15 +253,20 @@ if (all(c("Contrast", "ContrastName") %in% colnames(annot))) {
   contrasts <- annot$Contrast
   names(contrasts) <- annot$ContrastName
   contrasts <- contrasts[!is.na(contrasts) & nchar(contrasts) > 0]
-} else if (all(c("Group", "Control") %in% colnames(annot))) {
+} else if (all(c("group", "control") %in% tolower(colnames(annot)))) {
   # Format 2: Derive contrasts from Group/Control columns
-  # Control='C' means control group, Control='T' means treatment
+  # Control='C' means control group, Control='T' means treatment.
+  # The column names are matched case-insensitively: annotation files in the wild
+  # spell the second column both "Control" and "CONTROL".
+  group_col <- colnames(annot)[tolower(colnames(annot)) == "group"][[1]]
+  control_col <- colnames(annot)[tolower(colnames(annot)) == "control"][[1]]
+
   levels_df <- annot |>
-    dplyr::select(Group, Control) |>
+    dplyr::select(dplyr::all_of(c(group_col, control_col))) |>
     dplyr::distinct()
 
-  control_groups <- levels_df$Group[levels_df$Control == "C"]
-  treatment_groups <- levels_df$Group[levels_df$Control == "T"]
+  control_groups <- levels_df[[group_col]][toupper(levels_df[[control_col]]) == "C"]
+  treatment_groups <- levels_df[[group_col]][toupper(levels_df[[control_col]]) == "T"]
 
   # Generate contrasts: treatment - control (with G_ prefix for prolfqua)
   contrasts <- character()
@@ -220,13 +281,33 @@ if (all(c("Contrast", "ContrastName") %in% colnames(annot))) {
   stop("Annotation file must have either (Contrast, ContrastName) or (Group, Control) columns")
 }
 
+# An annotation can carry the right columns and still define nothing, for example a
+# template whose Group/Control cells are still empty. Fail here rather than fitting
+# contrasts that do not exist.
+if (length(contrasts) == 0) {
+  stop(
+    "No contrasts could be derived from ", basename(params$annot_file),
+    ": the annotation carries the expected columns but marks no control (C) and ",
+    "treatment (T) groups.",
+    call. = FALSE
+  )
+}
+
 knitr::kable(
   data.frame(Contrast_Name = names(contrasts), Contrast = contrasts),
-  caption = "Contrasts to be evaluated"
+  caption = paste0(
+    "Contrasts evaluated on the corrected PTM usage. Contrast_Name is the label used ",
+    "throughout the downstream reports, Contrast the linear-model expression it stands for, ",
+    "with G_ marking the group coefficients of the fitted model; a positive fold change means ",
+    "higher PTM usage in the first named group."
+  )
 )
 ```
 
 ## Compute Contrasts
+
+Evaluates the contrasts on the fitted models and applies variance moderation, which
+stabilises the per-site variance estimates by borrowing information across all sites.
 
 ```{r computeTheContrasts}
 ctr <- prolfqua::Contrasts$new(models, contrasts)
@@ -235,14 +316,20 @@ ctr_df <- ctr$get_contrasts()
 ctr <- prolfqua::ContrastsModerated$new(ctr)
 ctr_df <- ctr$get_contrasts()
 
-cat("Computed contrasts for", nrow(ctr_df), "PTM site-contrast combinations\n")
+n_site_contrast <- nrow(ctr_df)
 ```
+
+`r format(n_site_contrast, big.mark = ",")` site-contrast pairs were estimated
+(`r format(n_models, big.mark = ",")` sites x `r length(contrasts)` contrasts, minus sites the model could not
+estimate for a given contrast).
 
 # Results
 
 ## Volcano Plot
 
-```{r figVolcanoModelOnly, fig.cap="Volcano plot (Model results only)"}
+Overview of the result: effect size against significance, one panel per contrast.
+
+```{r figVolcanoModelOnly, fig.cap="Differential PTM usage per contrast, from the model fitted on protein-corrected abundances. Each point is one phosphosite; the x-axis is the estimated log2 fold change of corrected usage and the y-axis -log10(FDR) from the moderated t-test, so points to the left and right are sites used less or more, and points high up are the confident ones. Sites imputed rather than measured in a condition are excluded from the exported results."}
 ctr_plotter_model <- ctr$get_Plotter()
 ctr_plotter_model$volcano()$FDR
 ```
@@ -251,59 +338,61 @@ ctr_plotter_model$volcano()$FDR
 
 ## Add Site Information from DEA Results
 
+Joins the sequence window, residue position and gene annotation of each site onto the
+contrast results, so the exported table is self-contained for the downstream motif and
+enrichment reports.
+
 ```{r addSiteInfo}
-# Load site info (flanking sequences, position, modAA) from original DEA results
-ptm_xlsx <- get_dea_xlsx(params$phospho_dea_dir)
-full_results <- readxl::read_xlsx(ptm_xlsx, sheet = "normalized_abundances")
-
-# Get sequence window column (handles both old and new prolfquapp formats)
-seq_col <- grep("FlankingRegion|SequenceWindow", colnames(full_results), value = TRUE, ignore.case = TRUE)[1]
-
-# Determine column names based on format (old vs new prolfquapp output)
-# New format: protein_Id_site, PTM_SiteLocation, PTM_SiteAA, PTM_FlankingRegion
-# Old format: site, posInProtein, modAA, SequenceWindow/FlankingRegion
-has_new_format <- "protein_Id_site" %in% colnames(full_results)
-
-if (has_new_format) {
-  site_info <- full_results |>
-    dplyr::select(
-      protein_Id_site,
-      posInProtein = PTM_SiteLocation,
-      modAA = PTM_SiteAA,
-      SequenceWindow = !!sym(seq_col),
-      gene_name, protein_length
-    ) |>
-    dplyr::distinct()
-  # Merge using protein_Id_site
-  ctr_df_seq_window <- dplyr::left_join(ctr_df, site_info, by = "protein_Id_site")
-} else {
-  site_info <- full_results |>
-    dplyr::select(site, posInProtein, modAA, SequenceWindow = !!sym(seq_col),
-                  gene_name, protein_length) |>
-    dplyr::distinct()
-  # Merge using site
-  ctr_df_seq_window <- dplyr::left_join(ctr_df, site_info, by = "site")
-}
+site_info <- get_dea_ptm_site_info(params$phospho_dea_dir) |>
+  dplyr::select(-protein_Id)
+contrast_site_col <- intersect(c("site", "protein_Id_site"), names(ctr_df))[[1]]
+ctr_df_seq_window <- dplyr::left_join(
+  ctr_df,
+  site_info,
+  by = stats::setNames("site", contrast_site_col)
+)
 
 ```
 
 ## Export to Excel
 
-We are exporting only those contrasts computed without imputation.
+The contrast results are written to a single-sheet Excel workbook, which is the file every
+downstream report of this analysis reads. Only site-contrast pairs estimated from measured
+values are exported: a pair whose estimate would rest on an imputed value in one of the two
+groups is dropped, because a fold change measured against an imputed level is not
+interpretable. The table below reports how many pairs each case contributes.
+
+Column names follow the same convention as the DPA and DPU results, so the reports can read
+all three interchangeably: `diff.site` is the log2 fold change of protein-corrected PTM
+usage, `FDR.site` its adjusted p-value and `statistic.site` the moderated t-statistic.
+Alongside these sit the site annotation columns (`protein_Id`, `site`, `posInProtein`,
+`modAA`, `SequenceWindow`, `gene_name`, `protein_length`) and `estimate_type`, which records
+whether the underlying value was observed or filled in by limit-of-detection imputation.
 
 ```{r exportResults}
 # Rename columns to match DPA convention (diff.site, FDR.site, statistic.site)
-ctr_df_seq_window$modelName |> table()
 ctr_df <- ctr_df_seq_window |>
   dplyr::rename(diff.site = diff, FDR.site = FDR, statistic.site = statistic) |>
-  dplyr::mutate(modelName = ifelse(modelName == "WaldTest_moderated", "Linear_Model_Moderated", "MissingInOneCondition"))
+  dplyr::mutate(
+    modelName = ifelse(
+      modelName %in% c("WaldTest", "WaldTest_moderated"),
+      "Linear_Model_Moderated",
+      "MissingInOneCondition"
+    )
+  )
+
+# Count both cases before filtering, so the report can state what was dropped.
+model_counts <- ctr_df |>
+  dplyr::count(modelName, name = "Site_contrast_pairs")
+n_before <- nrow(ctr_df)
+
 # Remove contrasts computed with imputation
-ctr_df$modelName |> table()
-
 ctr_df <- ctr_df |> dplyr::filter(modelName != "MissingInOneCondition")
-ctr_df |> dplyr::filter(modelName != "MissingInOneCondition")
 
-stopifnot(nrow(ctr_df) == nrow(ctr$get_contrasts()))
+# The filter is allowed to drop rows; what must not happen is dropping everything.
+stopifnot(
+  "no site-contrast pair survived the imputation filter" = nrow(ctr_df) > 0
+)
 
 
 output_file <- file.path(res_dir, paste0("CorrectFirst_", wu_id, "_results.xlsx"))
@@ -311,16 +400,33 @@ writexl::write_xlsx(
   list(results = ctr_df),
   path = output_file
 )
-cat("Results exported to:", output_file, "\n")
+
+knitr::kable(
+  model_counts,
+  caption = paste0(
+    "How the site-contrast pairs were estimated, counted before the imputation filter. ",
+    "Linear_Model_Moderated pairs come from the moderated linear model on measured values ",
+    "and are exported; MissingInOneCondition pairs would rest on an imputed value in one of ",
+    "the two groups and are dropped. Exported: ",
+    format(nrow(ctr_df), big.mark = ","), " of ", format(n_before, big.mark = ","),
+    " site-contrast pairs, over ", dplyr::n_distinct(ctr_df$contrast), " contrasts."
+  )
+)
 ```
+
+The workbook is named `` `r basename(output_file)` `` and its single sheet is called
+`results`. It holds `r nrow(ctr_df)` rows and `r ncol(ctr_df)` columns.
 
 ## Output Location
 
-Results saved in:
+Every file produced by this analysis is written to `` `r res_dir` ``:
 
-```{r showresdir, echo=TRUE}
-res_dir
-```
+| File | Content |
+|:-----|:--------|
+| `` `r basename(output_file)` `` | the contrast results exported above, sheet `results`. This is the file the N-to-C, seqlogo and enrichment reports read. |
+| `CorrectFirst_intensities_wide.xlsx` | the protein-corrected PTM usage matrix, one column per sample, as it entered the linear model. |
+| `CorrectFirst_intensities_file_annotation.xlsx` | the sample annotation belonging to that matrix. |
+| `Analysis_CorrectFirst_DEA.html` | this report. |
 
 # Summary
 

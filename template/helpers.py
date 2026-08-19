@@ -53,6 +53,26 @@ def rmd_path_r_code(name: str, dev_path: str = "") -> str:
             if (rmd_path == '') stop('prophosqua application template not found: {name}', call. = FALSE)"""
 
 
+def render_tmp_dir(analysis: str, step: str) -> str:
+    """Build the private intermediates directory of one R Markdown render.
+
+    knitr names its intermediate files after the input .Rmd, so several rules
+    rendering the same vignette for different analysis types must not share an
+    intermediates directory: with -j2 or more they would overwrite each other's
+    .knit.md and every report would end up with the content of whichever render
+    finished last. Giving each rule its own directory keeps the renders
+    independent.
+
+    Args:
+        analysis: Analysis type (e.g., "dpa")
+        step: Rule family (e.g., "vis_mea")
+
+    Returns:
+        Path to the intermediates directory for that rule
+    """
+    return f".render/{step}_{analysis}"
+
+
 def get_parquet_path(dea_dir: str) -> str:
     """Get parquet file path from a DEA directory.
 

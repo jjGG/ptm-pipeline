@@ -1,12 +1,17 @@
 #!/usr/bin/env Rscript
-#' Prepare kinase-library input files from phosphoproteomics Excel results
+#' Prepare kinase-library input files from the combined PTM results
 #'
-#' Usage: Rscript src/prep_kinaselib.R <xlsx_file> <output_dir> <analysis_type>
+#' Reads the same workbook, sheet and ranking statistic as PTM-SEA and the
+#' KinaseLib GSEA, so all enrichment analyses rank the sites identically.
+#'
+#' Usage: Rscript src/prep_kinaselib.R <xlsx_file> <output_dir> <analysis_type> <sheet> <stat_column>
 #'
 #' Arguments:
-#'   xlsx_file     Path to Excel file (Result_DPA.xlsx, Result_DPU.xlsx, or CorrectFirst_*.xlsx)
+#'   xlsx_file     Path to the combined PTM_results.xlsx
 #'   output_dir    Output directory for kinase-library files (e.g., PTM_DPA/KinaseLib)
-#'   analysis_type Analysis type: DPA, DPU, or CF
+#'   analysis_type Analysis type: DPA, DPU, or CF (used for output file names)
+#'   sheet         Sheet to read (DPA, DPU, or CF)
+#'   stat_column   Column to rank the sites on, as declared in ptm_config.yaml
 #'
 #' Output files:
 #'   {analysis_type}_seqwindows.tsv     All unique SequenceWindows (for scan-motifs)
@@ -23,26 +28,25 @@ suppressPackageStartupMessages({
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
 
-if (length(args) < 3) {
-  stop("Usage: Rscript prep_kinaselib.R <xlsx_file> <output_dir> <analysis_type>")
+if (length(args) < 5) {
+  stop("Usage: Rscript prep_kinaselib.R <xlsx_file> <output_dir> <analysis_type> <sheet> <stat_column>")
 }
 
 xlsx_file <- args[1]
 output_dir <- args[2]
 analysis_type <- args[3]  # DPA, DPU, or CF
+sheet <- args[4]
+stat_col <- args[5]
 
 message("=== Preparing kinase-library inputs ===")
 message("Input file: ", xlsx_file)
 message("Output dir: ", output_dir)
 message("Analysis type: ", analysis_type)
-
-# Use shared column configuration
-source("src/feature_preparation.R")
-config <- get_analysis_config(analysis_type)
+message("Ranking on: ", stat_col)
 
 # Read Excel file
-message("Reading sheet: ", config$sheet)
-data <- read_xlsx(xlsx_file, sheet = config$sheet)
+message("Reading sheet: ", sheet)
+data <- read_xlsx(xlsx_file, sheet = sheet)
 message("  Loaded ", nrow(data), " rows")
 
 # Handle flanking column name variations
@@ -55,9 +59,9 @@ if (!"SequenceWindow" %in% names(data)) {
   }
 }
 
-# Validate diff column exists
-if (!config$diff_col %in% names(data)) {
-  stop("Diff column '", config$diff_col, "' not found. Available: ",
+# Validate statistic column exists (same ranking statistic as PTM-SEA)
+if (!stat_col %in% names(data)) {
+  stop("Statistic column '", stat_col, "' not found. Available: ",
        paste(head(names(data), 10), collapse = ", "))
 }
 
@@ -94,10 +98,10 @@ message("Found ", length(contrasts), " contrasts")
 
 for (ctr in contrasts) {
   ctr_data <- data_clean |>
-    filter(contrast == ctr, !is.na(.data[[config$diff_col]])) |>
+    filter(contrast == ctr, !is.na(.data[[stat_col]])) |>
     transmute(
       SequenceWindow,
-      statistic.site = .data[[config$diff_col]]
+      statistic.site = .data[[stat_col]]
     ) |>
     # Deduplicate: keep row with max absolute statistic per SequenceWindow
     group_by(SequenceWindow) |>

@@ -85,8 +85,18 @@ stopifnot(file.exists(ptm_file))
 required_cols <- c("protein_Id", "protein_length", "contrast")
 tot_res <- prophosqua::load_and_preprocess_data(tot_file, required_cols)
 tot_res <- prophosqua::filter_contaminants(tot_res)
+tot_res <- canonicalize_uniprot_ids(tot_res)
 phospho_res <- prophosqua::load_and_preprocess_data(ptm_file, required_cols)
 phospho_res <- prophosqua::filter_contaminants(phospho_res)
+
+site_info <- get_dea_ptm_site_info(params$phospho_dea_dir) |>
+  dplyr::select(site, posInProtein, modAA, SequenceWindow)
+phospho_site_col <- intersect(c("site", "protein_Id_site"), names(phospho_res))[[1]]
+phospho_res <- dplyr::left_join(
+  phospho_res,
+  site_info,
+  by = stats::setNames("site", phospho_site_col)
+)
 ```
 
 # DPA: Integrate PTM and Protein Data
@@ -124,7 +134,13 @@ match_rates <- combined_site_prot |>
 knitr::kable(
   match_rates,
   col.names = c("Contrast", "Total Sites", "Matched Sites", "Match Rate (%)"),
-  caption = "Match rates between PTM sites and proteins."
+  caption = paste0(
+    "How many phosphosites could be paired with a protein-level result, per contrast. Total ",
+    "Sites counts the sites tested in the phospho DEA, Matched Sites those whose protein was ",
+    "also quantified in the total proteome DEA, and Match Rate their ratio. Only matched ",
+    "sites can be corrected for protein abundance, so unmatched sites carry a DPA result but ",
+    "no DPU value."
+  )
 )
 ```
 

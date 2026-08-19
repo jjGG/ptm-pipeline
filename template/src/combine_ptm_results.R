@@ -34,16 +34,19 @@ standardize_results <- function(data, analysis_type) {
       rename = c(gene_name = "gene_name.site"),
       direct_cols = c("protein_Id", "site", "contrast", "posInProtein", "modAA",
                       "SequenceWindow", "protein_length", "diff.site", "FDR.site",
-                      "statistic.site", "diff.protein", "FDR.protein", "statistic.protein")
+                      "statistic.site", "diff.protein", "FDR.protein", "statistic.protein",
+                      "estimate_type.site", "estimate_type.protein")
     ),
     dpu = list(
       rename = c(gene_name = "gene_name.site", diff.site = "diff_diff",
                  FDR.site = "FDR_I", statistic.site = "tstatistic_I"),
       direct_cols = c("protein_Id", "site", "contrast", "posInProtein", "modAA",
-                      "SequenceWindow", "protein_length")
+                      "SequenceWindow", "protein_length",
+                      "estimate_type.site", "estimate_type.protein")
     ),
     cf = list(
-      rename = c(),
+      # CF has a single estimate per site, exported unsuffixed as estimate_type
+      rename = c(estimate_type.site = "estimate_type"),
       direct_cols = c("protein_Id", "site", "contrast", "posInProtein", "modAA",
                       "SequenceWindow", "gene_name", "protein_length",
                       "diff.site", "FDR.site", "statistic.site")
@@ -106,24 +109,22 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
   message("  DPU: ", nrow(dpu), " rows")
   message("  CF:  ", nrow(cf), " rows")
 
-  # Helper: normalize column names across prolfquapp versions
-  norm_cols <- function(df) {
-    if ("name" %in% colnames(df) && !"Name" %in% colnames(df)) {
-      df <- dplyr::rename(df, Name = name)
-    }
-    df
-  }
-
   # Load normalized abundances
   message("Loading protein abundances from: ", protein_parquet)
   protein_abund <- arrow::read_parquet(protein_parquet) |>
-    norm_cols() |>
+    canonicalize_dea_sample_column(
+      file.path(dirname(protein_parquet), "lfqdata.yaml")
+    ) |>
     dplyr::filter(!grepl("^rev_", protein_Id)) |>
+    canonicalize_uniprot_ids() |>
     dplyr::select(Name, protein_Id, normalized_abundance) |>
     tidyr::pivot_wider(names_from = Name, values_from = normalized_abundance)
 
   message("Loading site abundances from: ", site_parquet)
-  site_raw <- arrow::read_parquet(site_parquet) |> norm_cols()
+  site_raw <- arrow::read_parquet(site_parquet) |>
+    canonicalize_dea_sample_column(
+      file.path(dirname(site_parquet), "lfqdata.yaml")
+    )
 
   # Get site column name (may be 'site' or 'protein_Id_site')
   site_col <- if ("site" %in% colnames(site_raw)) "site" else "protein_Id_site"
@@ -137,12 +138,17 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
 
   # Read parquet again to get long format for joining
   site_long <- arrow::read_parquet(site_parquet) |>
-    norm_cols() |>
+    canonicalize_dea_sample_column(
+      file.path(dirname(site_parquet), "lfqdata.yaml")
+    ) |>
     dplyr::select(Name, site = !!sym(site_col), protein_Id, site_abund = normalized_abundance)
 
   protein_long <- arrow::read_parquet(protein_parquet) |>
-    norm_cols() |>
+    canonicalize_dea_sample_column(
+      file.path(dirname(protein_parquet), "lfqdata.yaml")
+    ) |>
     dplyr::filter(!grepl("^rev_", protein_Id)) |>
+    canonicalize_uniprot_ids() |>
     dplyr::select(Name, protein_Id, protein_abund = normalized_abundance)
 
   site_abund_cf <- site_long |>
@@ -180,11 +186,14 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
 if (!interactive()) {
   args <- commandArgs(trailingOnly = TRUE)
 
-  if (length(args) < 7) {
+  if (length(args) < 8) {
     cat("Usage: Rscript combine_ptm_results.R <dpa.xlsx> <dpu.xlsx> <cf.xlsx>",
-        "<protein.parquet> <site.parquet> <output.xlsx> <output.rds>\n")
+        "<protein.parquet> <site.parquet> <output.xlsx> <output.rds>",
+        "<dea_utils.R>\n")
     quit(status = 1)
   }
+
+  source(args[8])
 
   combine_ptm_results(
     dpa_xlsx = args[1],

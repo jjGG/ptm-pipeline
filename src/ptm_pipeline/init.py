@@ -23,24 +23,25 @@ console = Console()
 def get_template_dir() -> Path:
     """Get path to template directory from package data."""
     try:
-        import sys
-        if sys.prefix != sys.base_prefix:
-            # In a virtual environment
-            template_path = Path(sys.prefix) / "share" / "ptm-pipeline" / "template"
-            if template_path.exists():
-                return template_path
-
-        # Try site-packages location
         import ptm_pipeline
         pkg_dir = Path(ptm_pipeline.__file__).parent
+
+        # Prefer the template beside an editable source checkout. A virtual
+        # environment may retain an older installed copy under share/.
         template_path = pkg_dir.parent.parent / "template"
         if template_path.exists():
             return template_path
 
-        # Development mode - look relative to package
+        # Try one level above the normal editable-install layout.
         template_path = pkg_dir.parent.parent.parent / "template"
         if template_path.exists():
             return template_path
+
+        import sys
+        if sys.prefix != sys.base_prefix:
+            template_path = Path(sys.prefix) / "share" / "ptm-pipeline" / "template"
+            if template_path.exists():
+                return template_path
 
     except Exception:
         pass
