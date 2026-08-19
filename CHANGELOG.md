@@ -1,5 +1,20 @@
 # ptm-pipeline 0.3.0
 
+- Rerun the analyses when the DEA results they read change, by declaring the DEA
+  workbooks, normalized-abundance parquets and configuration YAMLs, and the sample
+  annotation, as rule inputs. The DPA/DPU and CorrectFirst rules named only their
+  own report source before and resolved the data themselves at render time, so
+  rerunning a DEA, editing the annotation, or pointing `ptm_config.yaml` at another
+  DEA directory left the whole pipeline reported as up to date.
+- Track the MEA result workbook and RDS as outputs of the MEA report rule, so a
+  failed render no longer leaves a stale workbook that looks current, and they can
+  be requested as targets.
+- Render the DPU integration overview in a private directory instead of the project
+  working directory. The prophosqua template and its bibliography were copied into
+  the project root and the bibliography left behind, and two concurrent renders
+  could overwrite each other's knitr intermediates.
+- Resolve the DEA input files deterministically when a DEA directory holds more
+  than one `Results_WU_*` subdirectory.
 - Export the per-site and per-protein `estimate_type` columns to the combined
   `PTM_results.xlsx`. The N-to-C reports read that workbook, so without those
   columns every site was drawn as if it had been measured; imputed estimates are

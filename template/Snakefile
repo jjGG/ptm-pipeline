@@ -5,7 +5,15 @@
 #   snakemake -j1 all                              # uses default ptm_config.yaml
 #   snakemake --configfile custom.yaml -j1 all
 
-from helpers import get_parquet_path, build_analysis_lookups, get_prophosqua_vignette, rmd_path_r_code, render_tmp_dir
+from helpers import (
+    build_analysis_lookups,
+    get_dea_xlsx_path,
+    get_dea_yaml_path,
+    get_parquet_path,
+    get_prophosqua_vignette,
+    render_tmp_dir,
+    rmd_path_r_code,
+)
 
 # Default config file (can be overridden with --configfile)
 configfile: "ptm_config.yaml"
@@ -93,7 +101,11 @@ rule all:
 rule analysis_dea:
     input:
         rmd = f"{SRC}/Analysis_DPA_DPU.Rmd",
-        utils_script = f"{SRC}/dea_utils.R"
+        utils_script = f"{SRC}/dea_utils.R",
+        # The report resolves these from the DEA directories itself. Declared so
+        # that rerunning a DEA rebuilds the workbooks this pipeline derives.
+        protein_xlsx = get_dea_xlsx_path(PROTEIN_DEA_DIR),
+        phospho_xlsx = get_dea_xlsx_path(PHOSPHO_DEA_DIR)
     output:
         dpa_xlsx = f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
         dpu_xlsx = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
@@ -139,7 +151,16 @@ rule render_dpu_overview:
 rule cf_dea:
     input:
         rmd = f"{SRC}/Analysis_CorrectFirst_DEA.Rmd",
-        utils_script = f"{SRC}/dea_utils.R"
+        utils_script = f"{SRC}/dea_utils.R",
+        # The report resolves these from the DEA directories itself. Declared so
+        # that rerunning a DEA, or editing the annotation that defines the model
+        # and its contrasts, rebuilds the CorrectFirst results.
+        annot = ANNOT_FILE,
+        protein_parquet = get_parquet_path(PROTEIN_DEA_DIR),
+        protein_yaml = get_dea_yaml_path(PROTEIN_DEA_DIR),
+        phospho_parquet = get_parquet_path(PHOSPHO_DEA_DIR),
+        phospho_yaml = get_dea_yaml_path(PHOSPHO_DEA_DIR),
+        phospho_xlsx = get_dea_xlsx_path(PHOSPHO_DEA_DIR)
     output:
         xlsx = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
         html = f"{ANALYSIS_DIRS['cf']}/Analysis_CorrectFirst_DEA.html"
@@ -174,21 +195,21 @@ rule combine_results:
         utils = f"{SRC}/dea_utils.R",
         dpa = f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
         dpu = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
-        cf = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx"
+        cf = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
+        # The abundance sheets of the combined workbook are read from these.
+        protein_pq = get_parquet_path(PROTEIN_DEA_DIR),
+        site_pq = get_parquet_path(PHOSPHO_DEA_DIR)
     output:
         xlsx = f"{DIR_OUT}/PTM_results.xlsx",
         rds = f"{DIR_OUT}/PTM_results.rds"
     log:
         f"{DIR_OUT}/logs/combine_results.log"
-    params:
-        protein_pq = get_parquet_path(PROTEIN_DEA_DIR),
-        site_pq = get_parquet_path(PHOSPHO_DEA_DIR)
     shell:
         """
         mkdir -p {DIR_OUT}/logs
         Rscript {input.script:q} \
             {input.dpa:q} {input.dpu:q} {input.cf:q} \
-            {params.protein_pq:q} {params.site_pq:q} \
+            {input.protein_pq:q} {input.site_pq:q} \
             {output.xlsx:q} {output.rds:q} {input.utils:q} 2>&1 | tee {log:q}
         """
 
@@ -442,7 +463,12 @@ for _analysis in ANALYSIS_TYPES:
             mea_files = expand(f"{adir(_analysis)}/KinaseLib/mea_{{c}}.csv", c=CONTRASTS),
             template = _rmd_template
         output:
-            html = f"{adir(_analysis)}/KinaseLib/Analysis_MEA.html"
+            html = f"{adir(_analysis)}/KinaseLib/Analysis_MEA.html",
+            # The report writes these alongside itself. Declared so that a failed
+            # render does not leave a stale workbook that looks current, and so
+            # that they can be requested as targets.
+            xlsx = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.xlsx",
+            rds = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.rds"
         log:
             f"{adir(_analysis)}/logs/vis_mea.log"
         params:

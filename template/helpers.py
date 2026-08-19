@@ -5,6 +5,7 @@ and constructing file paths used by the Snakemake pipeline.
 """
 
 import glob
+import os
 import subprocess
 
 
@@ -73,25 +74,73 @@ def render_tmp_dir(analysis: str, step: str) -> str:
     return f".render/{step}_{analysis}"
 
 
-def get_parquet_path(dea_dir: str) -> str:
-    """Get parquet file path from a DEA directory.
+def _dea_file(dea_dir: str, filename: str, description: str) -> str:
+    """Resolve one file inside the Results_WU_* subdirectory of a DEA directory.
 
-    Finds the lfqdata_normalized.parquet file within the Results_WU_* subdirectory.
+    Mirrors get_dea_file() in src/dea_utils.R so that a file declared as a rule
+    input is the same file the R code opens. Matches are sorted before the first
+    is taken: a DEA directory is expected to hold one Results_WU_*, and sorting
+    keeps the choice reproducible if it ever holds more.
+
+    Args:
+        dea_dir: Path to DEA output directory
+        filename: File to find inside Results_WU_* (glob patterns allowed)
+        description: Wording for the error message
+
+    Returns:
+        Path to the file
+
+    Raises:
+        ValueError: If no such file is found
+    """
+    matches = sorted(glob.glob(f"{dea_dir}/Results_WU_*/{filename}"))
+    if not matches:
+        raise ValueError(f"No {description} found in {dea_dir}")
+    return matches[0]
+
+
+def get_parquet_path(dea_dir: str) -> str:
+    """Get the normalized abundance parquet of a DEA directory.
 
     Args:
         dea_dir: Path to DEA output directory (e.g., "DEA_setup/DEA_20260109_WUphospho_SHP2_vsn")
 
     Returns:
         Path to the normalized parquet file
-
-    Raises:
-        ValueError: If no parquet file is found
     """
-    pattern = f"{dea_dir}/Results_WU_*/lfqdata_normalized.parquet"
-    matches = glob.glob(pattern)
+    return _dea_file(dea_dir, "lfqdata_normalized.parquet", "parquet file")
+
+
+def get_dea_yaml_path(dea_dir: str) -> str:
+    """Get the analysis configuration YAML of a DEA directory.
+
+    Args:
+        dea_dir: Path to DEA output directory
+
+    Returns:
+        Path to lfqdata.yaml
+    """
+    return _dea_file(dea_dir, "lfqdata.yaml", "yaml file")
+
+
+def get_dea_xlsx_path(dea_dir: str) -> str:
+    """Get the results workbook of a DEA directory.
+
+    Prefers the DE_-prefixed workbook that prolfquapp writes, as
+    get_dea_xlsx() in src/dea_utils.R does, so that the declared input is the
+    workbook the reports actually read.
+
+    Args:
+        dea_dir: Path to DEA output directory
+
+    Returns:
+        Path to the results workbook
+    """
+    matches = sorted(glob.glob(f"{dea_dir}/Results_WU_*/*.xlsx"))
     if not matches:
-        raise ValueError(f"No parquet file found in {dea_dir}")
-    return matches[0]
+        raise ValueError(f"No Excel file found in {dea_dir}")
+    preferred = [m for m in matches if os.path.basename(m).startswith("DE_")]
+    return preferred[0] if preferred else matches[0]
 
 
 def build_analysis_lookups(dir_out: str, analyses_config: dict) -> dict:

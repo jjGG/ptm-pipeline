@@ -50,7 +50,14 @@ drumm <- prolfquapp::make_DEA_config_R6(
   WORKUNITID = work_unit_id
 )
 
-# Copy template from prophosqua without relying on package helper API names.
+# Copy the template and its bibliography into a private render directory.
+# Rendering in the working directory would leave both files in the project root
+# and let two concurrent renders overwrite each other's knitr intermediates,
+# which are named after the input .Rmd. tempdir() is private to this R process
+# and is removed when it exits.
+render_dir <- file.path(tempdir(), "dpu_overview")
+dir.create(render_dir, recursive = TRUE, showWarnings = FALSE)
+
 integration_files <- c(
   "application/_Overview_PhosphoAndIntegration_site.Rmd",
   "application/bibliography2025.bib"
@@ -60,13 +67,15 @@ for (file in integration_files) {
   if (!nzchar(src) || !file.exists(src)) {
     stop("prophosqua integration file not found: ", file, call. = FALSE)
   }
-  file.copy(src, basename(file), overwrite = TRUE)
+  file.copy(src, file.path(render_dir, basename(file)), overwrite = TRUE)
 }
 
-# Render the overview document
+# Render the overview document. knit_root_dir keeps the chunks running in the
+# project directory, as they did when the template was rendered in place.
 message("Rendering DPU overview report...")
 rmarkdown::render(
-  "_Overview_PhosphoAndIntegration_site.Rmd",
+  file.path(render_dir, "_Overview_PhosphoAndIntegration_site.Rmd"),
+  knit_root_dir = getwd(),
   params = list(
     data = combined_test_diff,
     grp = drumm
@@ -81,14 +90,9 @@ rmarkdown::render(
 # Move output to target location
 output_file <- file.path(output_dir, "Result_DPU.html")
 file.copy(
-  from = "_Overview_PhosphoAndIntegration_site.html",
+  from = file.path(render_dir, "_Overview_PhosphoAndIntegration_site.html"),
   to = output_file,
   overwrite = TRUE
 )
-
-# Clean up temporary files
-unlink("_Overview_PhosphoAndIntegration_site.Rmd")
-unlink("_Overview_PhosphoAndIntegration_site.html")
-unlink("bibliography2025.bib")
 
 message("DPU overview report saved to: ", output_file)
