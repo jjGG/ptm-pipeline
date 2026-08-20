@@ -8,7 +8,6 @@ params:
   fdr: 0.05
   fc: 0.6
   output_base: !r paste0("PTM_", format(Sys.Date(), "%Y%m%d"))
-  utils_script: "src/dea_utils.R"
   phospho_dea_dir: "DEA_setup/DEA_20260109_WUphospho_SHP2_vsn"
   protein_dea_dir: "DEA_setup/DEA_20260109_WUprot_SHP2_vsn"
   annot_file: "DEA_setup/phospho_annot_SHP2_RUX.tsv"
@@ -32,7 +31,6 @@ default_params <- list(
   fdr = 0.05,
   fc = 0.6,
   output_base = paste0("PTM_", format(Sys.Date(), "%Y%m%d")),
-  utils_script = "src/dea_utils.R",
   phospho_dea_dir = "DEA_setup/DEA_20260109_WUphospho_SHP2_vsn",
   protein_dea_dir = "DEA_setup/DEA_20260109_WUprot_SHP2_vsn",
   annot_file = "DEA_setup/phospho_annot_SHP2_RUX.tsv"
@@ -100,7 +98,6 @@ control file of the analysis: its grouping column becomes the model term and its
 definitions become the comparisons evaluated further below.
 
 ```{r defineParameters}
-source(params$utils_script)
 
 wu_id <- "PTM_usage"
 

@@ -5,7 +5,6 @@ author:
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
 params:
   output_base: !r paste0("PTM_", format(Sys.Date(), "%Y%m%d"))
-  utils_script: "src/dea_utils.R"
   phospho_dea_dir: "DEA_setup/DEA_20260109_WUphospho_SHP2_vsn"
   protein_dea_dir: "DEA_setup/DEA_20260109_WUprot_SHP2_vsn"
 output:
@@ -71,7 +70,6 @@ if (!dir.exists(file.path(project_dir, res_dir_dpu))) {
 # Load DEA Results
 
 ```{r definePaths}
-source(params$utils_script)
 
 # Get Excel files from direct DEA directory paths
 tot_file <- get_dea_xlsx(params$protein_dea_dir)

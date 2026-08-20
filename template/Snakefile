@@ -101,7 +101,6 @@ rule all:
 rule analysis_dea:
     input:
         rmd = f"{SRC}/Analysis_DPA_DPU.Rmd",
-        utils_script = f"{SRC}/dea_utils.R",
         # The report resolves these from the DEA directories itself. Declared so
         # that rerunning a DEA rebuilds the workbooks this pipeline derives.
         protein_xlsx = get_dea_xlsx_path(PROTEIN_DEA_DIR),
@@ -115,7 +114,6 @@ rule analysis_dea:
         f"{DIR_OUT}/logs/analysis_dea.log"
     params:
         output_base = DIR_OUT,
-        utils_script = f"{SRC}/dea_utils.R",
         output_dir = ANALYSIS_DIRS['dpa'],
         phospho_dea_dir = PHOSPHO_DEA_DIR,
         protein_dea_dir = PROTEIN_DEA_DIR
@@ -125,7 +123,6 @@ rule analysis_dea:
         Rscript -e "rmarkdown::render('{input.rmd:q}', output_dir='{params.output_dir}', \
             knit_root_dir=getwd(), \
             params=list(output_base='{params.output_base}', \
-            utils_script='{params.utils_script}', \
             phospho_dea_dir='{params.phospho_dea_dir}', \
             protein_dea_dir='{params.protein_dea_dir}'))" 2>&1 | tee {log:q}
         """
@@ -151,7 +148,6 @@ rule render_dpu_overview:
 rule cf_dea:
     input:
         rmd = f"{SRC}/Analysis_CorrectFirst_DEA.Rmd",
-        utils_script = f"{SRC}/dea_utils.R",
         # The report resolves these from the DEA directories itself. Declared so
         # that rerunning a DEA, or editing the annotation that defines the model
         # and its contrasts, rebuilds the CorrectFirst results.
@@ -168,7 +164,6 @@ rule cf_dea:
         f"{DIR_OUT}/logs/cf_dea.log"
     params:
         output_base = DIR_OUT,
-        utils_script = f"{SRC}/dea_utils.R",
         output_dir = ANALYSIS_DIRS['cf'],
         phospho_dea_dir = PHOSPHO_DEA_DIR,
         protein_dea_dir = PROTEIN_DEA_DIR,
@@ -179,7 +174,6 @@ rule cf_dea:
         Rscript -e "rmarkdown::render('{input.rmd:q}', output_dir='{params.output_dir}', \
             knit_root_dir=getwd(), \
             params=list(output_base='{params.output_base}', \
-            utils_script='{params.utils_script}', \
             phospho_dea_dir='{params.phospho_dea_dir}', \
             protein_dea_dir='{params.protein_dea_dir}', \
             annot_file='{params.annot_file}'))" \
@@ -192,7 +186,6 @@ rule cf_dea:
 rule combine_results:
     input:
         script = f"{SRC}/combine_ptm_results.R",
-        utils = f"{SRC}/dea_utils.R",
         dpa = f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
         dpu = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
         cf = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
@@ -210,7 +203,7 @@ rule combine_results:
         Rscript {input.script:q} \
             {input.dpa:q} {input.dpu:q} {input.cf:q} \
             {input.protein_pq:q} {input.site_pq:q} \
-            {output.xlsx:q} {output.rds:q} {input.utils:q} 2>&1 | tee {log:q}
+            {output.xlsx:q} {output.rds:q} 2>&1 | tee {log:q}
         """
 
 # ============================================================
@@ -224,7 +217,6 @@ for _analysis in ANALYSIS_TYPES:
         name: f"n_to_c_{_analysis}"
         input:
             xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            utils = f"{SRC}/feature_preparation.R",
             template = _rmd_template
         output:
             html = f"{adir(_analysis)}/Analysis_n_to_c.html"
@@ -266,7 +258,6 @@ for _analysis in ANALYSIS_TYPES:
         name: f"seqlogo_{_analysis}"
         input:
             xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            utils = f"{SRC}/feature_preparation.R",
             template = _rmd_template
         output:
             html = f"{adir(_analysis)}/Analysis_seqlogo.html"

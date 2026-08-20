@@ -1,5 +1,12 @@
 # ptm-pipeline 0.3.0
 
+- Stop shipping `src/dea_utils.R` and `src/feature_preparation.R` into every project. Their
+  functions are now prophosqua exports, documented and tested there. A project no longer
+  carries a copy that can drift from the package or shadow it, and the reports call the
+  package directly instead of `source()`ing a file out of the working directory.
+- `combine_ptm_results.R` takes seven arguments instead of eight; the utilities argument is
+  gone with the file it pointed at.
+
 - Rerun the analyses when the DEA results they read change, by declaring the DEA
   workbooks, normalized-abundance parquets and configuration YAMLs, and the sample
   annotation, as rule inputs. The DPA/DPU and CorrectFirst rules named only their

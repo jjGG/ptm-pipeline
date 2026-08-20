@@ -112,17 +112,17 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
   # Load normalized abundances
   message("Loading protein abundances from: ", protein_parquet)
   protein_abund <- arrow::read_parquet(protein_parquet) |>
-    canonicalize_dea_sample_column(
+    prophosqua::canonicalize_dea_sample_column(
       file.path(dirname(protein_parquet), "lfqdata.yaml")
     ) |>
     dplyr::filter(!grepl("^rev_", protein_Id)) |>
-    canonicalize_uniprot_ids() |>
+    prophosqua::canonicalize_uniprot_ids() |>
     dplyr::select(Name, protein_Id, normalized_abundance) |>
     tidyr::pivot_wider(names_from = Name, values_from = normalized_abundance)
 
   message("Loading site abundances from: ", site_parquet)
   site_raw <- arrow::read_parquet(site_parquet) |>
-    canonicalize_dea_sample_column(
+    prophosqua::canonicalize_dea_sample_column(
       file.path(dirname(site_parquet), "lfqdata.yaml")
     )
 
@@ -138,17 +138,17 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
 
   # Read parquet again to get long format for joining
   site_long <- arrow::read_parquet(site_parquet) |>
-    canonicalize_dea_sample_column(
+    prophosqua::canonicalize_dea_sample_column(
       file.path(dirname(site_parquet), "lfqdata.yaml")
     ) |>
     dplyr::select(Name, site = !!sym(site_col), protein_Id, site_abund = normalized_abundance)
 
   protein_long <- arrow::read_parquet(protein_parquet) |>
-    canonicalize_dea_sample_column(
+    prophosqua::canonicalize_dea_sample_column(
       file.path(dirname(protein_parquet), "lfqdata.yaml")
     ) |>
     dplyr::filter(!grepl("^rev_", protein_Id)) |>
-    canonicalize_uniprot_ids() |>
+    prophosqua::canonicalize_uniprot_ids() |>
     dplyr::select(Name, protein_Id, protein_abund = normalized_abundance)
 
   site_abund_cf <- site_long |>
@@ -186,14 +186,13 @@ combine_ptm_results <- function(dpa_xlsx, dpu_xlsx, cf_xlsx,
 if (!interactive()) {
   args <- commandArgs(trailingOnly = TRUE)
 
-  if (length(args) < 8) {
+  if (length(args) < 7) {
     cat("Usage: Rscript combine_ptm_results.R <dpa.xlsx> <dpu.xlsx> <cf.xlsx>",
         "<protein.parquet> <site.parquet> <output.xlsx> <output.rds>",
-        "<dea_utils.R>\n")
+        "\n")
     quit(status = 1)
   }
 
-  source(args[8])
 
   combine_ptm_results(
     dpa_xlsx = args[1],

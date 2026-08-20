@@ -77,7 +77,7 @@ def render_tmp_dir(analysis: str, step: str) -> str:
 def _dea_file(dea_dir: str, filename: str, description: str) -> str:
     """Resolve one file inside the Results_WU_* subdirectory of a DEA directory.
 
-    Mirrors get_dea_file() in src/dea_utils.R so that a file declared as a rule
+    Mirrors prophosqua::get_dea_file() so that a file declared as a rule
     input is the same file the R code opens. Matches are sorted before the first
     is taken: a DEA directory is expected to hold one Results_WU_*, and sorting
     keeps the choice reproducible if it ever holds more.
@@ -127,7 +127,7 @@ def get_dea_xlsx_path(dea_dir: str) -> str:
     """Get the results workbook of a DEA directory.
 
     Prefers the DE_-prefixed workbook that prolfquapp writes, as
-    get_dea_xlsx() in src/dea_utils.R does, so that the declared input is the
+    prophosqua::get_dea_xlsx() does, so that the declared input is the
     workbook the reports actually read.
 
     Args:
