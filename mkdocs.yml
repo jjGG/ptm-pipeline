@@ -1,0 +1,31 @@
+site_name: PTM Pipeline
+site_description: Integrated phosphoproteomics PTM analysis pipeline
+docs_dir: docs
+site_dir: public
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Methods: methods.md
+  - R packages: packages.md
+  - Public datasets: public-datasets.md
+  - Slides: slides.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  # methods.md is the root METHODS.md, which is also the manuscript's methods
+  # section: included rather than copied so there is one text, not two that
+  # drift. check_paths fails the build if it ever moves.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  # Renders ```mermaid fences as diagrams. The fence is the only source of each
+  # diagram -- github.com renders the same fence natively in the file view.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format

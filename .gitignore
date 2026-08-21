@@ -28,3 +28,6 @@ test_data/*
 tests/data/*/
 !tests/data/*.zip
 !tests/Makefile
+
+# MkDocs build output
+public/

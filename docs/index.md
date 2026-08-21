@@ -1,5 +1,4 @@
 ---
-layout: default
 title: PTM Pipeline
 ---
 
@@ -170,34 +169,13 @@ The rendered HTML reports are available as downloadable artifacts:
 
 See [Methods](methods.md) for a full description of the computational workflow, software components, and citation information.
 
+See [R Package Dependencies](packages.md) for how the R packages the pipeline calls depend on each other, and which layer a fix belongs in.
+
+See [Public PTM Datasets](public-datasets.md) for public phosphoproteomics datasets with a factorial design and a matched total proteome, which of them the pipeline can actually consume, and how the search was done.
+
 ## Links
 
 - [GitHub Repository](https://github.com/wolski/ptm-pipeline)
 - [Docker Image](https://github.com/wolski/ptm-pipeline/pkgs/container/ptm-pipeline-ci)
 - [prolfqua](https://github.com/prolfqua/prolfqua) / [prolfquapp](https://github.com/prolfqua/prolfquapp)
 - [prophosqua](https://github.com/prolfqua/prophosqua)
-
-<!--
-  Jekyll turns a ```mermaid fence into a highlighted code block, so the diagram
-  above would ship as source unless something renders it. This hands each such
-  block's text to mermaid. github.com renders the same fence natively, so the
-  fence stays the single source of the diagram either way.
--->
-<script type="module">
-  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-
-  const blocks = document.querySelectorAll(
-    "div.language-mermaid, pre > code.language-mermaid"
-  );
-  for (const block of blocks) {
-    const pre = document.createElement("pre");
-    pre.className = "mermaid";
-    // textContent, not innerHTML: the highlighter may have wrapped the source
-    // in spans, and mermaid needs the graph text as written.
-    pre.textContent = block.textContent.trim();
-    block.replaceWith(pre);
-  }
-
-  mermaid.initialize({ startOnLoad: false, theme: "neutral" });
-  await mermaid.run();
-</script>

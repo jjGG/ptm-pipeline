@@ -1,6 +1,5 @@
 ---
-layout: default
 title: Materials and Methods
 ---
 
-{% include methods_content.md %}
+--8<-- "METHODS.md"

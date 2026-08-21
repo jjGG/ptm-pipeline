@@ -21,6 +21,11 @@ PTM Pipeline is a deployment tool for phosphoproteomics PTM (Post-Translational 
 uv sync                              # Install dependencies
 uv run ptm-pipeline --help           # Run CLI in development mode
 
+# Documentation (MkDocs + Material, deployed by .github/workflows/pages.yml)
+uv sync --only-group docs            # Install the docs toolchain
+uv run mkdocs serve                  # Preview at http://127.0.0.1:8000
+uv run mkdocs build --strict         # Build into public/ exactly as CI does
+
 # CLI commands
 ptm-pipeline init [DIR]              # Initialize pipeline (auto-discovers DEA folders)
 ptm-pipeline validate [DIR]          # Check dependencies and setup

@@ -23,6 +23,19 @@
   protein-level counterpart joined alongside, and the diagram says which steps compute data,
   which render HTML, and which of them run once per analysis type. The diagram is a mermaid
   fence, so it renders both on the Pages site and in the file view on GitHub.
+- The documentation site is built with MkDocs and Material instead of Jekyll, matching the
+  FGCZ Python project layout: a root `mkdocs.yml` names the nav, `uv sync --only-group docs`
+  installs the toolchain, and `pages.yml` deploys what `mkdocs build --strict` produces, so a
+  broken link or a missing include fails the build instead of shipping. Mermaid diagrams are
+  rendered by the theme, so the pages no longer carry a hand-written mermaid loader, and the
+  Methods page includes the root `METHODS.md` directly rather than the workflow copying it in.
+  `uv run mkdocs serve` previews the site locally, which the Jekyll setup could not do without
+  Ruby.
+- The documentation site gained an R package dependency page: which of the R packages the
+  pipeline calls depends on which, what each one owns, and the layer ordering
+  prolfqua → prolfquapp → prophosqua that keeps the graph acyclic and decides how far
+  upstream a fix belongs. Edges are read from the packages' `DESCRIPTION` files, which stay
+  the only declaration of them.
 - Two new targets name the tiers: `snakemake -j1 data` builds everything that writes data,
   `snakemake -j1 reports` everything that renders HTML from it.
 - The enrichment result workbooks and RDS files -- PTM-SEA, kinase-library GSEA and MEA, six

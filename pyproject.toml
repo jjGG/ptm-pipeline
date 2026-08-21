@@ -21,6 +21,11 @@ dev = [
     "pyarrow>=14.0",
 ]
 
+[dependency-groups]
+docs = [
+    "mkdocs-material>=9.7,<10",
+]
+
 [project.urls]
 Homepage = "https://github.com/wolski/ptm-pipeline"
 Repository = "https://github.com/wolski/ptm-pipeline"
