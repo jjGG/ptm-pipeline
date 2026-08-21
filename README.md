@@ -66,12 +66,18 @@ After `ptm-pipeline init`:
 ```
 o40XXX_NewProject/
 ├── DEA_*/...
-├── ptm_config.yaml       # Generated config
+├── ptm_config.yaml       # Generated config, the only project-owned file
 ├── Makefile              # Convenience targets
-├── Snakefile       # Pipeline
+├── Snakefile             # Pipeline
 ├── helpers.py
-└── src/                  # R/Rmd analysis files
+└── ptm.sh                # One wrapper: ./ptm.sh help lists the steps
 ```
+
+There is no `src/`. The analysis code lives in the installed prophosqua package:
+`ptm.sh <command>` resolves that command's R script from the install path, and the
+pipeline calls the same wrapper the same way. To change how an analysis behaves, edit prophosqua and reinstall
+it — an edit in a project directory would be discarded by the next
+`ptm-pipeline update`.
 
 ## Requirements
 

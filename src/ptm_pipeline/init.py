@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import shutil
+import subprocess
 
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
@@ -55,6 +56,11 @@ def get_template_dir() -> Path:
 def copy_template_files(project_dir: Path, dry_run: bool = False) -> list[str]:
     """Copy template files to project directory.
 
+    The project gets the workflow and nothing else: Snakefile, helpers.py and
+    Makefile, plus the ptm.sh wrapper prophosqua ships. No R code is copied,
+    because there is none to copy -- every rule reaches its R script through
+    that wrapper, which resolves it from the installed package.
+
     Returns list of copied file paths (relative to project_dir).
     """
     template_dir = get_template_dir()
@@ -71,22 +77,93 @@ def copy_template_files(project_dir: Path, dry_run: bool = False) -> list[str]:
                 shutil.copy2(src, dst)
             copied_files.append(filename)
 
-    # Copy src/ directory
-    src_dir = template_dir / "src"
-    dst_src_dir = project_dir / "src"
-
-    if src_dir.exists():
-        if not dry_run:
-            if dst_src_dir.exists():
-                shutil.rmtree(dst_src_dir)
-            shutil.copytree(src_dir, dst_src_dir)
-
-        for f in src_dir.rglob("*"):
-            if f.is_file():
-                rel_path = f.relative_to(template_dir)
-                copied_files.append(str(rel_path))
+    copied_files.extend(copy_shell_wrapper(project_dir, dry_run=dry_run))
+    copied_files.extend(remove_legacy_src(project_dir, dry_run=dry_run))
+    copied_files.extend(remove_legacy_wrappers(project_dir, dry_run=dry_run))
 
     return copied_files
+
+
+def copy_shell_wrapper(project_dir: Path, dry_run: bool = False) -> list[str]:
+    """Place prophosqua's ptm.sh wrapper in the project directory.
+
+    The Snakefile calls the wrapper at its install path, so this copy is for a
+    person at a prompt: running ./ptm.sh dpa_dpu by hand is running exactly what
+    the pipeline runs, and ./ptm.sh help lists the steps. The wrapper resolves
+    both its command list and each command's R script from the installed
+    package, so the copy carries no analysis logic and cannot drift.
+    """
+    if dry_run:
+        return ["ptm.sh"]
+
+    result = subprocess.run(
+        [
+            "Rscript", "--vanilla", "-e",
+            "invisible(prophosqua::copy_ptm_shell_script("
+            f'{_r_string(str(project_dir))}))',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        console.print(
+            "[yellow]Warning:[/yellow] could not copy the prophosqua ptm.sh "
+            "wrapper. The pipeline still runs -- it calls it at its install "
+            "path -- but it will not be here to call by hand."
+        )
+        console.print(f"  {result.stderr.strip().splitlines()[-1:] or ''}")
+        return []
+
+    return sorted(p.name for p in project_dir.glob("ptm.sh"))
+
+
+def remove_legacy_src(project_dir: Path, dry_run: bool = False) -> list[str]:
+    """Delete the src/ directory of a project initialised before the move.
+
+    Those files are copies of R code that now lives in prophosqua. Leaving them
+    behind would be worse than deleting them: a stale copy of a report template
+    invites an edit that no run will ever pick up.
+    """
+    legacy = project_dir / "src"
+    if not legacy.is_dir():
+        return []
+
+    if not dry_run:
+        shutil.rmtree(legacy)
+    console.print(
+        f"  {'Would remove' if dry_run else 'Removed'} src/ -- "
+        "its R code now lives in the prophosqua package."
+    )
+    return []
+
+
+def remove_legacy_wrappers(project_dir: Path, dry_run: bool = False) -> list[str]:
+    """Delete the per-command ptm_<name>.sh wrappers of an older project.
+
+    They have been replaced by one ptm.sh taking the command as its first
+    argument. A left-behind ptm_ptmsea.sh would still run -- it resolves its
+    script from the installed package like everything else -- until the day
+    prophosqua stops shipping the script it names, at which point it fails with
+    a missing file rather than saying it is obsolete.
+    """
+    legacy = sorted(project_dir.glob("ptm_*.sh"))
+    if not legacy:
+        return []
+
+    for wrapper in legacy:
+        if not dry_run:
+            wrapper.unlink()
+    console.print(
+        f"  {'Would remove' if dry_run else 'Removed'} {len(legacy)} "
+        "per-command ptm_*.sh wrapper(s) -- replaced by ptm.sh <command>."
+    )
+    return []
+
+
+def _r_string(value: str) -> str:
+    """Quote a path for interpolation into an R expression."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def init_project(

@@ -41,14 +41,18 @@ src/ptm_pipeline/
 ├── config.py       # YAML config generation
 └── validate.py     # Environment validation (files, R packages, tools)
 
-template/                      # Copied to target projects on init
-├── Snakefile           # Main Snakemake orchestration
-├── helpers.py                # Snakemake helper functions
-└── src/                      # R/Rmd analysis scripts
-    ├── Analysis_DPA_DPU.Rmd
-    ├── Analysis_CorrectFirst_DEA.Rmd
-    └── ...
+template/                # Copied to target projects on init
+├── Snakefile            # Main Snakemake orchestration
+├── helpers.py           # Snakemake helper functions
+└── Makefile             # Convenience targets
 ```
+
+There is no `template/src/`. A project holds no R code: every rule calls
+`ptm.sh <command>`, the one wrapper from the installed prophosqua's
+`inst/application/bin`, which resolves that command's `CMD_*.R` from the install
+path. `ptm-pipeline init` and `update` copy `ptm.sh` into the project so a person
+can run the same entry point by hand, and `update` deletes a `src/` and any
+per-command `ptm_*.sh` left over from before the move. To change analysis behaviour, edit prophosqua and reinstall it.
 
 ## Key Patterns
 

@@ -53,6 +53,40 @@ def check_r_package(package: str) -> ValidationResult:
         return ValidationResult(f"R: {package}", False, "Rscript not found")
 
 
+def check_prophosqua_wrapper() -> ValidationResult:
+    """Check that the installed prophosqua ships the ptm.sh wrapper.
+
+    Every rule runs through it, so an installed but too-old prophosqua fails
+    the whole workflow at parse time. Naming that here is cheaper than reading
+    a Snakemake traceback.
+    """
+    description = "prophosqua ptm.sh wrapper"
+    try:
+        result = subprocess.run(
+            [
+                "Rscript", "--vanilla", "-e",
+                'cat(system.file("application", "bin/ptm.sh", '
+                'package = "prophosqua"))',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return ValidationResult(description, False, "Timeout checking")
+    except FileNotFoundError:
+        return ValidationResult(description, False, "Rscript not found")
+
+    path = result.stdout.strip()
+    if not path or not Path(path).exists():
+        return ValidationResult(
+            description,
+            False,
+            "Not found. Reinstall prophosqua: make -C <prophosqua> install",
+        )
+    return ValidationResult(description, True, str(Path(path).parent))
+
+
 def check_command_exists(command: str, description: str) -> ValidationResult:
     """Check if a command is available in PATH."""
     if shutil.which(command):
@@ -106,8 +140,10 @@ def validate_project(project_dir: Path, quick: bool = False) -> bool:
     results.append(check_file_exists(project_dir / "Snakefile", "Snakefile"))
     results.append(check_file_exists(project_dir / "helpers.py", "helpers.py"))
 
-    # Check src directory
-    results.append(check_dir_exists(project_dir / "src", "src/ directory"))
+    # The analysis code lives in prophosqua, reached through its wrappers.
+    # Resolving one of them proves both that the package is installed and that
+    # it is new enough to carry them.
+    results.append(check_prophosqua_wrapper())
 
     # Check DEA folders if config exists
     if config:

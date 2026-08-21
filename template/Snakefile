@@ -1,8 +1,19 @@
 # Snakefile - Unified PTM Analysis Pipeline
 # Uses standardized output format with combined PTM_results.xlsx
 #
+# Every rule that runs R does so through ptm.sh, the wrapper shipped with
+# prophosqua, which resolves the named command's R script from the installed
+# package. The project therefore holds no R code, and no rule embeds any: one
+# entry point, one place where the analysis lives. `./ptm.sh help` lists the
+# commands; running one by hand runs exactly what the rule runs.
+#
+# Rules come in two tiers. `data` computes and writes data products; `reports`
+# renders HTML from what those wrote and can be re-run on its own.
+#
 # Usage:
 #   snakemake -j1 all                              # uses default ptm_config.yaml
+#   snakemake -j1 data                             # data products only
+#   snakemake -j1 reports                          # reports only
 #   snakemake --configfile custom.yaml -j1 all
 
 from helpers import (
@@ -10,16 +21,15 @@ from helpers import (
     get_dea_xlsx_path,
     get_dea_yaml_path,
     get_parquet_path,
-    get_prophosqua_vignette,
+    get_prophosqua_file,
+    get_prophosqua_install_stamp,
     render_tmp_dir,
-    rmd_path_r_code,
 )
 
 # Default config file (can be overridden with --configfile)
 configfile: "ptm_config.yaml"
 
 # Convenience aliases from config
-SRC = config["src"]
 DIR_OUT = config["dir_out"]
 PHOSPHO_DEA_DIR = config["phospho_dea_dir"]
 PROTEIN_DEA_DIR = config["protein_dea_dir"]
@@ -48,6 +58,36 @@ PTMSIGDB_TRIM = _ptmsigdb.get("trim_to", 15)
 PTMSIGDB_DIR = _ptmsigdb.get("output_dir", "data/ptmsigdb")
 PTMSIGDB_FILE = f"{PTMSIGDB_DIR}/ptmsigdb_filtered_{PTMSIGDB_SOURCES.replace(',', '_')}_{PTMSIGDB_TRIM}mer.rds"
 
+# ============================================================
+# The installed prophosqua: wrappers, command scripts, reports
+#
+# Each rule declares the wrapper it calls and the script or template that
+# wrapper reaches, so that reinstalling prophosqua invalidates exactly the rules
+# whose code changed. Resolving them here also fails the parse, rather than a
+# rule halfway through a run, when the package is missing or too old.
+# ============================================================
+# One wrapper for every step: `ptm.sh <command> [options]`. It resolves the
+# command's script from the installation, so a work directory holds a single
+# file, and `ptm.sh help` lists the steps as the installed package has them.
+PTM = get_prophosqua_file("bin/ptm.sh")
+CMD = {
+    name: get_prophosqua_file(f"CMD_{name.upper()}.R")
+    for name in (
+        "dpa_dpu", "cf_dea", "combine_results", "prep_ptmsigdb",
+        "prep_kinaselib", "dpu_overview", "ptmsea", "kinaselib_gsea", "mea",
+        "render",
+    )
+}
+
+# A rule's real dependency is the whole installed package, not only the script it
+# names: the script's work happens in prophosqua's R code. Declaring this makes a
+# reinstall invalidate every rule that runs R.
+PKG = get_prophosqua_install_stamp()
+
+def report_template(name):
+    """Resolve one of the report templates prophosqua ships."""
+    return get_prophosqua_file(name)
+
 # Build lookup dictionaries from config
 LOOKUPS = build_analysis_lookups(DIR_OUT, config["analyses"])
 ANALYSIS_TYPES = LOOKUPS["types"]  # ["dpa", "dpu", "cf"]
@@ -69,70 +109,136 @@ def aupper(analysis):
     return ANALYSIS_SHEETS[analysis]
 
 # ============================================================
-# Default target
+# Tier targets and default target
 # ============================================================
+DATA_TARGETS = [
+    f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
+    f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
+    f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
+    f"{DIR_OUT}/PTM_results.xlsx",
+    f"{DIR_OUT}/PTM_results.rds",
+]
+if RUN_KINASE:
+    DATA_TARGETS += (
+        [f"{adir(a)}/KinaseLib/term2gene.csv" for a in ANALYSIS_TYPES]
+        + [
+            f"{adir(a)}/KinaseLib/mea_{c}.csv"
+            for a in ANALYSIS_TYPES for c in CONTRASTS
+        ]
+        # The three enrichment analyses write their results whether or not
+        # anything was enriched, which is what lets them be declared here.
+        + [
+            f"{adir(a)}/PTMSEA/PTMSEA_{aupper(a)}_results.{ext}"
+            for a in ANALYSIS_TYPES for ext in ("xlsx", "rds")
+        ]
+        + [
+            f"{adir(a)}/KinaseLib/KinaseLib_GSEA_{aupper(a)}.{ext}"
+            for a in ANALYSIS_TYPES for ext in ("xlsx", "rds")
+        ]
+        + [
+            f"{adir(a)}/KinaseLib/MEA_{aupper(a)}_results.{ext}"
+            for a in ANALYSIS_TYPES for ext in ("xlsx", "rds")
+        ]
+    )
+
+REPORT_TARGETS = (
+    [
+        f"{ANALYSIS_DIRS['dpa']}/Analysis_DPA_DPU.html",
+        f"{ANALYSIS_DIRS['cf']}/Analysis_CorrectFirst_DEA.html",
+        f"{ANALYSIS_DIRS['dpu']}/Result_DPU.html",
+    ]
+    + expand("{d}/Analysis_n_to_c.html", d=ANALYSIS_DIRS.values())
+    + expand("{d}/Analysis_seqlogo.html", d=ANALYSIS_DIRS.values())
+    + ([f"{adir(a)}/PTMSEA/PTMSEA_{aupper(a)}.html" for a in ANALYSIS_TYPES] if RUN_KINASE else [])
+    + ([f"{adir(a)}/KinaseLib/Analysis_KinaseLib_{aupper(a)}.html" for a in ANALYSIS_TYPES] if RUN_KINASE else [])
+    + (expand("{d}/KinaseLib/Analysis_MEA.html", d=ANALYSIS_DIRS.values()) if RUN_KINASE else [])
+    + [f"{DIR_OUT}/index.html"]
+)
+
 rule all:
     input:
-        # Combined results
-        f"{DIR_OUT}/PTM_results.xlsx",
-        f"{DIR_OUT}/PTM_results.rds",
-        # DPU integration overview
-        f"{ANALYSIS_DIRS['dpu']}/Result_DPU.html",
-        # N-to-C plots (all analyses)
-        expand("{d}/Analysis_n_to_c.html", d=ANALYSIS_DIRS.values()),
-        # Seqlogo plots (all analyses)
-        expand("{d}/Analysis_seqlogo.html", d=ANALYSIS_DIRS.values()),
-        # PTM-SEA (all analyses, optional)
-        [f"{adir(a)}/PTMSEA/PTMSEA_{aupper(a)}.html" for a in ANALYSIS_TYPES] if RUN_KINASE else [],
-        # KinaseLib GSEA (all analyses, optional)
-        [f"{adir(a)}/KinaseLib/Analysis_KinaseLib_{aupper(a)}.html" for a in ANALYSIS_TYPES] if RUN_KINASE else [],
-        # KinaseLib MEA Visualization (all analyses, optional)
-        expand("{d}/KinaseLib/Analysis_MEA.html", d=ANALYSIS_DIRS.values()) if RUN_KINASE else [],
-        # Top index page
-        f"{DIR_OUT}/index.html",
+        DATA_TARGETS,
+        REPORT_TARGETS,
         # Zip archives (results + DEA inputs)
         f"{DIR_OUT}.zip",
         f"{PHOSPHO_DEA_DIR}.zip",
         f"{PROTEIN_DEA_DIR}.zip"
 
-# ============================================================
-# DEA Rules (generate base Excel files)
-# ============================================================
-rule analysis_dea:
+rule data:
     input:
-        rmd = f"{SRC}/Analysis_DPA_DPU.Rmd",
-        # The report resolves these from the DEA directories itself. Declared so
-        # that rerunning a DEA rebuilds the workbooks this pipeline derives.
+        DATA_TARGETS
+
+rule reports:
+    input:
+        REPORT_TARGETS
+
+# ============================================================
+# DPA and DPU: compute, then report
+# ============================================================
+rule compute_dpa_dpu:
+    input:
+        wrapper = PTM,
+        script = CMD["dpa_dpu"],
+        prophosqua = PKG,
+        # The computation resolves these from the DEA directories itself.
+        # Declared so that rerunning a DEA rebuilds what this pipeline derives.
         protein_xlsx = get_dea_xlsx_path(PROTEIN_DEA_DIR),
         phospho_xlsx = get_dea_xlsx_path(PHOSPHO_DEA_DIR)
     output:
         dpa_xlsx = f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
         dpu_xlsx = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
         dpu_rds = f"{ANALYSIS_DIRS['dpu']}/combined_test_diff.rds",
-        html = f"{ANALYSIS_DIRS['dpa']}/Analysis_DPA_DPU.html"
+        objects = f"{ANALYSIS_DIRS['dpa']}/dpa_dpu_objects.rds"
     log:
-        f"{DIR_OUT}/logs/analysis_dea.log"
+        f"{DIR_OUT}/logs/compute_dpa_dpu.log"
     params:
-        output_base = DIR_OUT,
-        output_dir = ANALYSIS_DIRS['dpa'],
+        dpa_dir = ANALYSIS_DIRS['dpa'],
+        dpu_dir = ANALYSIS_DIRS['dpu'],
         phospho_dea_dir = PHOSPHO_DEA_DIR,
         protein_dea_dir = PROTEIN_DEA_DIR
     shell:
         """
-        mkdir -p {DIR_OUT}/logs {ANALYSIS_DIRS[dpa]} {ANALYSIS_DIRS[dpu]}
-        Rscript -e "rmarkdown::render('{input.rmd:q}', output_dir='{params.output_dir}', \
-            knit_root_dir=getwd(), \
-            params=list(output_base='{params.output_base}', \
-            phospho_dea_dir='{params.phospho_dea_dir}', \
-            protein_dea_dir='{params.protein_dea_dir}'))" 2>&1 | tee {log:q}
+        mkdir -p {DIR_OUT}/logs
+        bash {input.wrapper:q} dpa_dpu \
+            --phospho_dea_dir {params.phospho_dea_dir:q} \
+            --protein_dea_dir {params.protein_dea_dir:q} \
+            --dpa_dir {params.dpa_dir:q} \
+            --dpu_dir {params.dpu_dir:q} 2>&1 | tee {log:q}
+        """
+
+rule report_dpa_dpu:
+    input:
+        wrapper = PTM,
+        script = CMD["render"],
+        prophosqua = PKG,
+        template = report_template("Analysis_DPA_DPU.Rmd"),
+        objects = f"{ANALYSIS_DIRS['dpa']}/dpa_dpu_objects.rds"
+    output:
+        html = f"{ANALYSIS_DIRS['dpa']}/Analysis_DPA_DPU.html"
+    log:
+        f"{ANALYSIS_DIRS['dpa']}/logs/report_dpa_dpu.log"
+    params:
+        output_dir = ANALYSIS_DIRS['dpa'],
+        render_dir = render_tmp_dir("dpa", "report_dpa_dpu")
+    shell:
+        """
+        mkdir -p {params.output_dir:q}/logs {params.render_dir:q}
+        bash {input.wrapper:q} render \
+            --report Analysis_DPA_DPU.Rmd \
+            --output_file Analysis_DPA_DPU.html \
+            --output_dir {params.output_dir:q} \
+            --intermediates_dir {params.render_dir:q} \
+            objects_rds={input.objects:q} 2>&1 | tee {log:q}
+        rm -rf {params.render_dir:q}
         """
 
 rule render_dpu_overview:
     input:
-        script = f"{SRC}/render_dpu_overview.R",
-        rds = f"{ANALYSIS_DIRS['dpu']}/combined_test_diff.rds",
-        # Declared so that reinstalling prophosqua invalidates this report.
-        template = get_prophosqua_vignette("_Overview_PhosphoAndIntegration_site.Rmd")
+        wrapper = PTM,
+        script = CMD["dpu_overview"],
+        prophosqua = PKG,
+        template = report_template("_Overview_PhosphoAndIntegration_site.Rmd"),
+        rds = f"{ANALYSIS_DIRS['dpu']}/combined_test_diff.rds"
     output:
         html = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.html"
     log:
@@ -141,16 +247,23 @@ rule render_dpu_overview:
         output_dir = ANALYSIS_DIRS['dpu']
     shell:
         """
-        mkdir -p {ANALYSIS_DIRS[dpu]}/logs
-        Rscript {input.script:q} {input.rds:q} {params.output_dir:q} 2>&1 | tee {log:q}
+        mkdir -p {params.output_dir:q}/logs
+        bash {input.wrapper:q} dpu_overview \
+            --input_rds {input.rds:q} \
+            --output_dir {params.output_dir:q} 2>&1 | tee {log:q}
         """
 
-rule cf_dea:
+# ============================================================
+# CorrectFirst: compute, then report
+# ============================================================
+rule compute_cf_dea:
     input:
-        rmd = f"{SRC}/Analysis_CorrectFirst_DEA.Rmd",
-        # The report resolves these from the DEA directories itself. Declared so
-        # that rerunning a DEA, or editing the annotation that defines the model
-        # and its contrasts, rebuilds the CorrectFirst results.
+        wrapper = PTM,
+        script = CMD["cf_dea"],
+        prophosqua = PKG,
+        # The computation resolves these itself. Declared so that rerunning a
+        # DEA, or editing the annotation that defines the model and its
+        # contrasts, rebuilds the CorrectFirst results.
         annot = ANNOT_FILE,
         protein_parquet = get_parquet_path(PROTEIN_DEA_DIR),
         protein_yaml = get_dea_yaml_path(PROTEIN_DEA_DIR),
@@ -159,25 +272,51 @@ rule cf_dea:
         phospho_xlsx = get_dea_xlsx_path(PHOSPHO_DEA_DIR)
     output:
         xlsx = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
-        html = f"{ANALYSIS_DIRS['cf']}/Analysis_CorrectFirst_DEA.html"
+        wide = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_intensities_wide.xlsx",
+        annotation = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_intensities_file_annotation.xlsx",
+        objects = f"{ANALYSIS_DIRS['cf']}/cf_objects.rds"
     log:
-        f"{DIR_OUT}/logs/cf_dea.log"
+        f"{DIR_OUT}/logs/compute_cf_dea.log"
     params:
-        output_base = DIR_OUT,
         output_dir = ANALYSIS_DIRS['cf'],
         phospho_dea_dir = PHOSPHO_DEA_DIR,
         protein_dea_dir = PROTEIN_DEA_DIR,
         annot_file = ANNOT_FILE
     shell:
         """
-        mkdir -p {DIR_OUT}/logs {ANALYSIS_DIRS[cf]}
-        Rscript -e "rmarkdown::render('{input.rmd:q}', output_dir='{params.output_dir}', \
-            knit_root_dir=getwd(), \
-            params=list(output_base='{params.output_base}', \
-            phospho_dea_dir='{params.phospho_dea_dir}', \
-            protein_dea_dir='{params.protein_dea_dir}', \
-            annot_file='{params.annot_file}'))" \
-            2>&1 | tee {log:q}
+        mkdir -p {DIR_OUT}/logs
+        bash {input.wrapper:q} cf_dea \
+            --phospho_dea_dir {params.phospho_dea_dir:q} \
+            --protein_dea_dir {params.protein_dea_dir:q} \
+            --annot_file {params.annot_file:q} \
+            --output_dir {params.output_dir:q} 2>&1 | tee {log:q}
+        """
+
+rule report_cf_dea:
+    input:
+        wrapper = PTM,
+        script = CMD["render"],
+        prophosqua = PKG,
+        template = report_template("Analysis_CorrectFirst_DEA.Rmd"),
+        objects = f"{ANALYSIS_DIRS['cf']}/cf_objects.rds"
+    output:
+        html = f"{ANALYSIS_DIRS['cf']}/Analysis_CorrectFirst_DEA.html"
+    log:
+        f"{ANALYSIS_DIRS['cf']}/logs/report_cf_dea.log"
+    params:
+        output_dir = ANALYSIS_DIRS['cf'],
+        render_dir = render_tmp_dir("cf", "report_cf_dea")
+    shell:
+        """
+        mkdir -p {params.output_dir:q}/logs {params.render_dir:q}
+        bash {input.wrapper:q} render \
+            --report Analysis_CorrectFirst_DEA.Rmd \
+            --output_file Analysis_CorrectFirst_DEA.html \
+            --output_dir {params.output_dir:q} \
+            --intermediates_dir {params.render_dir:q} \
+            objects_rds={input.objects:q} \
+            results_xlsx=CorrectFirst_PTM_usage_results.xlsx 2>&1 | tee {log:q}
+        rm -rf {params.render_dir:q}
         """
 
 # ============================================================
@@ -185,7 +324,9 @@ rule cf_dea:
 # ============================================================
 rule combine_results:
     input:
-        script = f"{SRC}/combine_ptm_results.R",
+        wrapper = PTM,
+        script = CMD["combine_results"],
+        prophosqua = PKG,
         dpa = f"{ANALYSIS_DIRS['dpa']}/Result_DPA.xlsx",
         dpu = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.xlsx",
         cf = f"{ANALYSIS_DIRS['cf']}/CorrectFirst_PTM_usage_results.xlsx",
@@ -200,88 +341,92 @@ rule combine_results:
     shell:
         """
         mkdir -p {DIR_OUT}/logs
-        Rscript {input.script:q} \
-            {input.dpa:q} {input.dpu:q} {input.cf:q} \
-            {input.protein_pq:q} {input.site_pq:q} \
-            {output.xlsx:q} {output.rds:q} 2>&1 | tee {log:q}
+        bash {input.wrapper:q} combine_results \
+            --dpa_xlsx {input.dpa:q} \
+            --dpu_xlsx {input.dpu:q} \
+            --cf_xlsx {input.cf:q} \
+            --protein_parquet {input.protein_pq:q} \
+            --site_parquet {input.site_pq:q} \
+            --output_xlsx {output.xlsx:q} \
+            --output_rds {output.rds:q} 2>&1 | tee {log:q}
         """
 
 # ============================================================
 # N-to-C Analysis (one rule per analysis type)
-# Uses prophosqua::Analysis_n_to_c.Rmd vignette
 # ============================================================
 for _analysis in ANALYSIS_TYPES:
-    _rmd_finder = rmd_path_r_code("Analysis_n_to_c.Rmd")
-    _rmd_template = get_prophosqua_vignette("Analysis_n_to_c.Rmd")
     rule:
         name: f"n_to_c_{_analysis}"
         input:
-            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            template = _rmd_template
+            wrapper = PTM,
+            script = CMD["render"],
+            prophosqua = PKG,
+            template = report_template("Analysis_n_to_c.Rmd"),
+            xlsx = f"{DIR_OUT}/PTM_results.xlsx"
         output:
             html = f"{adir(_analysis)}/Analysis_n_to_c.html"
         log:
             f"{adir(_analysis)}/logs/n_to_c.log"
         params:
-            xlsx_file = f"{DIR_OUT}/PTM_results.xlsx",
             sheet = ANALYSIS_SHEETS[_analysis],
             analysis_type = _analysis,
-            output_dir_param = adir(_analysis),
+            output_dir = adir(_analysis),
             max_fig = MAX_FIG,
             fdr = FDR_THRESHOLD,
             fc = LOG2FC_THRESHOLD,
-            rmd_output_dir = adir(_analysis),
-            render_dir = render_tmp_dir(_analysis, "n_to_c"),
-            rmd_finder = _rmd_finder
+            render_dir = render_tmp_dir(_analysis, "n_to_c")
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs {params.render_dir:q}
-            Rscript -e "{params.rmd_finder}
-            rmarkdown::render(rmd_path, output_file='Analysis_n_to_c.html',
-                output_dir='{params.rmd_output_dir}', knit_root_dir=getwd(),
-                intermediates_dir='{params.render_dir}',
-                output_format = bookdown::html_document2(toc=TRUE, toc_float=TRUE, code_folding='hide'),
-                params=list(xlsx_file='{params.xlsx_file}', sheet='{params.sheet}',
-                analysis_type='{params.analysis_type}', output_dir='{params.output_dir_param}',
-                max_fig={params.max_fig}, fdr={params.fdr}, fc={params.fc}))" 2>&1 | tee {log:q}
+            mkdir -p {params.output_dir:q}/logs {params.render_dir:q}
+            bash {input.wrapper:q} render \
+                --report Analysis_n_to_c.Rmd \
+                --output_file Analysis_n_to_c.html \
+                --output_dir {params.output_dir:q} \
+                --intermediates_dir {params.render_dir:q} \
+                xlsx_file={input.xlsx:q} \
+                sheet={params.sheet:q} \
+                analysis_type={params.analysis_type:q} \
+                output_dir={params.output_dir:q} \
+                max_fig={params.max_fig} \
+                fdr={params.fdr} \
+                fc={params.fc} 2>&1 | tee {log:q}
             rm -rf {params.render_dir:q}
             """
 
 # ============================================================
 # Seqlogo Analysis (one rule per analysis type)
-# Uses prophosqua::Analysis_seqlogo.Rmd vignette
 # ============================================================
 for _analysis in ANALYSIS_TYPES:
-    _rmd_finder = rmd_path_r_code("Analysis_seqlogo.Rmd")
-    _rmd_template = get_prophosqua_vignette("Analysis_seqlogo.Rmd")
     rule:
         name: f"seqlogo_{_analysis}"
         input:
-            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            template = _rmd_template
+            wrapper = PTM,
+            script = CMD["render"],
+            prophosqua = PKG,
+            template = report_template("Analysis_seqlogo.Rmd"),
+            xlsx = f"{DIR_OUT}/PTM_results.xlsx"
         output:
             html = f"{adir(_analysis)}/Analysis_seqlogo.html"
         log:
             f"{adir(_analysis)}/logs/seqlogo.log"
         params:
-            xlsx_file = f"{DIR_OUT}/PTM_results.xlsx",
             sheet = ANALYSIS_SHEETS[_analysis],
-            analysis_type = aupper(_analysis),
+            output_dir = adir(_analysis),
             fdr = FDR_THRESHOLD,
             fc = LOG2FC_THRESHOLD,
-            rmd_output_dir = adir(_analysis),
-            render_dir = render_tmp_dir(_analysis, "seqlogo"),
-            rmd_finder = _rmd_finder
+            render_dir = render_tmp_dir(_analysis, "seqlogo")
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs {params.render_dir:q}
-            Rscript -e "{params.rmd_finder}
-            rmarkdown::render(rmd_path, output_file='Analysis_seqlogo.html',
-                output_dir='{params.rmd_output_dir}', knit_root_dir=getwd(),
-                intermediates_dir='{params.render_dir}',
-                output_format = bookdown::html_document2(toc=TRUE, toc_float=TRUE, code_folding='hide'),
-                params=list(xlsx_file='{params.xlsx_file}', sheet='{params.sheet}',
-                fdr={params.fdr}, fc={params.fc}))" 2>&1 | tee {log:q}
+            mkdir -p {params.output_dir:q}/logs {params.render_dir:q}
+            bash {input.wrapper:q} render \
+                --report Analysis_seqlogo.Rmd \
+                --output_file Analysis_seqlogo.html \
+                --output_dir {params.output_dir:q} \
+                --intermediates_dir {params.render_dir:q} \
+                xlsx_file={input.xlsx:q} \
+                sheet={params.sheet:q} \
+                fdr={params.fdr} \
+                fc={params.fc} 2>&1 | tee {log:q}
             rm -rf {params.render_dir:q}
             """
 
@@ -290,6 +435,10 @@ for _analysis in ANALYSIS_TYPES:
 # Downloads human+mouse PTMsigDB, filters by sub-source, trims sequences
 # ============================================================
 rule prep_ptmsigdb:
+    input:
+        wrapper = PTM,
+        script = CMD["prep_ptmsigdb"],
+        prophosqua = PKG
     output:
         rds = PTMSIGDB_FILE,
         gmt = PTMSIGDB_FILE.replace(".rds", ".gmt")
@@ -301,56 +450,86 @@ rule prep_ptmsigdb:
         trim_to = PTMSIGDB_TRIM
     shell:
         """
-        mkdir -p {params.output_dir}/logs
-        Rscript {SRC}/prep_ptmsigdb.R \
+        mkdir -p {params.output_dir:q}/logs
+        bash {input.wrapper:q} prep_ptmsigdb \
             --output_dir {params.output_dir:q} \
             --keep_sources {params.keep_sources} \
             --trim_to {params.trim_to} 2>&1 | tee {log:q}
         """
 
 # ============================================================
-# PTM-SEA Analysis (one rule per analysis type)
-# Uses prophosqua::Analysis_PTMSEA.Rmd vignette
+# PTM-SEA: compute, then report (one pair per analysis type)
 # ============================================================
 for _analysis in ANALYSIS_TYPES:
-    _rmd_finder = rmd_path_r_code("Analysis_PTMSEA.Rmd")
-    _rmd_template = get_prophosqua_vignette("Analysis_PTMSEA.Rmd")
+    rule:
+        name: f"compute_ptmsea_{_analysis}"
+        input:
+            wrapper = PTM,
+            script = CMD["ptmsea"],
+            prophosqua = PKG,
+            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
+            ptmsigdb = PTMSIGDB_FILE
+        output:
+            xlsx = f"{adir(_analysis)}/PTMSEA/PTMSEA_{aupper(_analysis)}_results.xlsx",
+            rds = f"{adir(_analysis)}/PTMSEA/PTMSEA_{aupper(_analysis)}_results.rds"
+        log:
+            f"{adir(_analysis)}/logs/compute_ptmsea.log"
+        params:
+            sheet = ANALYSIS_SHEETS[_analysis],
+            stat_column = ANALYSIS_STAT_COLS[_analysis],
+            analysis_type = aupper(_analysis),
+            output_dir = f"{adir(_analysis)}/PTMSEA",
+            log_dir = adir(_analysis),
+            trim_to = PTMSIGDB_TRIM,
+            min_size = GSEA_MIN_SIZE,
+            max_size = GSEA_MAX_SIZE,
+            n_perm = GSEA_N_PERM
+        shell:
+            """
+            mkdir -p {params.log_dir:q}/logs {params.output_dir:q}
+            bash {input.wrapper:q} ptmsea \
+                --xlsx_file {input.xlsx:q} \
+                --sheet {params.sheet:q} \
+                --stat_column {params.stat_column:q} \
+                --ptmsigdb_file {input.ptmsigdb:q} \
+                --analysis_type {params.analysis_type:q} \
+                --output_dir {params.output_dir:q} \
+                --trim_to {params.trim_to} \
+                --min_size {params.min_size} \
+                --max_size {params.max_size} \
+                --n_perm {params.n_perm} 2>&1 | tee {log:q}
+            """
+
+for _analysis in ANALYSIS_TYPES:
     rule:
         name: f"ptmsea_{_analysis}"
         input:
-            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            ptmsigdb = PTMSIGDB_FILE,
-            template = _rmd_template
+            wrapper = PTM,
+            script = CMD["render"],
+            prophosqua = PKG,
+            template = report_template("Analysis_PTMSEA.Rmd"),
+            objects = f"{adir(_analysis)}/PTMSEA/PTMSEA_{aupper(_analysis)}_results.rds"
         output:
             html = f"{adir(_analysis)}/PTMSEA/PTMSEA_{aupper(_analysis)}.html"
         log:
             f"{adir(_analysis)}/logs/ptmsea.log"
         params:
-            xlsx_file = f"{DIR_OUT}/PTM_results.xlsx",
-            sheet = ANALYSIS_SHEETS[_analysis],
-            stat_column = ANALYSIS_STAT_COLS[_analysis],
             analysis_type = aupper(_analysis),
-            output_dir_param = f"{adir(_analysis)}/PTMSEA",
-            rmd_output_dir = f"{adir(_analysis)}/PTMSEA",
+            output_dir = f"{adir(_analysis)}/PTMSEA",
+            log_dir = adir(_analysis),
             final_html = f"PTMSEA_{aupper(_analysis)}.html",
-            ptmsigdb_file = PTMSIGDB_FILE,
-            min_size = GSEA_MIN_SIZE,
-            max_size = GSEA_MAX_SIZE,
-            n_perm = GSEA_N_PERM,
-            render_dir = render_tmp_dir(_analysis, "ptmsea"),
-            rmd_finder = _rmd_finder
+            render_dir = render_tmp_dir(_analysis, "ptmsea")
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs """ + adir(_analysis) + """/PTMSEA {params.render_dir:q}
-            Rscript -e "{params.rmd_finder}
-            rmarkdown::render(rmd_path, output_file='{params.final_html}',
-                output_dir='{params.rmd_output_dir}', knit_root_dir=getwd(),
-                intermediates_dir='{params.render_dir}',
-                output_format = bookdown::html_document2(toc=TRUE, toc_float=TRUE, code_folding='hide'),
-                params=list(xlsx_file='{params.xlsx_file}', sheet='{params.sheet}',
-                stat_column='{params.stat_column}', analysis_type='{params.analysis_type}',
-                output_dir='{params.output_dir_param}', ptmsigdb_file='{params.ptmsigdb_file}',
-                min_size={params.min_size}, max_size={params.max_size}, n_perm={params.n_perm}))" 2>&1 | tee {log:q}
+            mkdir -p {params.log_dir:q}/logs {params.render_dir:q}
+            bash {input.wrapper:q} render \
+                --report Analysis_PTMSEA.Rmd \
+                --output_file {params.final_html:q} \
+                --output_dir {params.output_dir:q} \
+                --intermediates_dir {params.render_dir:q} \
+                objects_rds={input.objects:q} \
+                analysis_type={params.analysis_type:q} \
+                output_dir={params.output_dir:q} 2>&1 | tee {log:q}
             rm -rf {params.render_dir:q}
             """
 
@@ -363,7 +542,9 @@ for _analysis in ANALYSIS_TYPES:
     rule:
         name: f"prep_kinaselib_{_analysis}"
         input:
-            script = f"{SRC}/prep_kinaselib.R",
+            wrapper = PTM,
+            script = CMD["prep_kinaselib"],
+            prophosqua = PKG,
             xlsx = f"{DIR_OUT}/PTM_results.xlsx"
         output:
             seqwindows = f"{adir(_analysis)}/KinaseLib/{aupper(_analysis)}_seqwindows.tsv",
@@ -372,14 +553,19 @@ for _analysis in ANALYSIS_TYPES:
             f"{adir(_analysis)}/logs/prep_kinaselib.log"
         params:
             output_dir = f"{adir(_analysis)}/KinaseLib",
+            log_dir = adir(_analysis),
             analysis_type = aupper(_analysis),
             sheet = ANALYSIS_SHEETS[_analysis],
             stat_column = ANALYSIS_STAT_COLS[_analysis]
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs """ + adir(_analysis) + """/KinaseLib
-            Rscript {input.script:q} {input.xlsx:q} {params.output_dir:q} \
-                {params.analysis_type} {params.sheet:q} {params.stat_column:q} 2>&1 | tee {log:q}
+            mkdir -p {params.log_dir:q}/logs {params.output_dir:q}
+            bash {input.wrapper:q} prep_kinaselib \
+                --xlsx_file {input.xlsx:q} \
+                --output_dir {params.output_dir:q} \
+                --analysis_type {params.analysis_type:q} \
+                --sheet {params.sheet:q} \
+                --stat_column {params.stat_column:q} 2>&1 | tee {log:q}
             """
 
 # ============================================================
@@ -397,10 +583,11 @@ for _analysis in ANALYSIS_TYPES:
         params:
             repo = KL_REPO,
             kin_type = KL_KIN_TYPE,
-            threshold = KL_THRESHOLD
+            threshold = KL_THRESHOLD,
+            log_dir = adir(_analysis)
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs
+            mkdir -p {params.log_dir:q}/logs
             uv tool run --from {params.repo} scan-motifs {input:q} \
                 --seq-col SequenceWindow \
                 --output {output:q} \
@@ -427,10 +614,11 @@ for _analysis in ANALYSIS_TYPES:
             repo = KL_REPO,
             kin_type = KL_KIN_TYPE,
             threshold = KL_THRESHOLD,
-            permutations = KL_PERMUTATIONS
+            permutations = KL_PERMUTATIONS,
+            log_dir = adir(_analysis)
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs
+            mkdir -p {params.log_dir:q}/logs
             uv tool run --from {params.repo} run-mea {input.rnk:q} \
                 --seq-col SequenceWindow \
                 --rank-col statistic.site \
@@ -442,87 +630,133 @@ for _analysis in ANALYSIS_TYPES:
             """
 
 # ============================================================
-# KinaseLib MEA Visualization (one rule per analysis type)
-# Uses prophosqua::Analysis_MEA.Rmd vignette
+# KinaseLib MEA: collect, then report (one pair per analysis type)
 # ============================================================
 for _analysis in ANALYSIS_TYPES:
-    _rmd_finder = rmd_path_r_code("Analysis_MEA.Rmd")
-    _rmd_template = get_prophosqua_vignette("Analysis_MEA.Rmd")
+    rule:
+        name: f"compute_mea_{_analysis}"
+        input:
+            wrapper = PTM,
+            script = CMD["mea"],
+            prophosqua = PKG,
+            mea_files = expand(f"{adir(_analysis)}/KinaseLib/mea_{{c}}.csv", c=CONTRASTS)
+        output:
+            xlsx = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.xlsx",
+            rds = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.rds"
+        log:
+            f"{adir(_analysis)}/logs/compute_mea.log"
+        params:
+            kinaselib_dir = f"{adir(_analysis)}/KinaseLib",
+            log_dir = adir(_analysis),
+            analysis_type = aupper(_analysis)
+        shell:
+            """
+            mkdir -p {params.log_dir:q}/logs
+            bash {input.wrapper:q} mea \
+                --kinaselib_dir {params.kinaselib_dir:q} \
+                --analysis_type {params.analysis_type:q} 2>&1 | tee {log:q}
+            """
+
+for _analysis in ANALYSIS_TYPES:
     rule:
         name: f"vis_mea_{_analysis}"
         input:
-            mea_files = expand(f"{adir(_analysis)}/KinaseLib/mea_{{c}}.csv", c=CONTRASTS),
-            template = _rmd_template
+            wrapper = PTM,
+            script = CMD["render"],
+            prophosqua = PKG,
+            template = report_template("Analysis_MEA.Rmd"),
+            objects = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.rds"
         output:
-            html = f"{adir(_analysis)}/KinaseLib/Analysis_MEA.html",
-            # The report writes these alongside itself. Declared so that a failed
-            # render does not leave a stale workbook that looks current, and so
-            # that they can be requested as targets.
-            xlsx = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.xlsx",
-            rds = f"{adir(_analysis)}/KinaseLib/MEA_{aupper(_analysis)}_results.rds"
+            html = f"{adir(_analysis)}/KinaseLib/Analysis_MEA.html"
         log:
             f"{adir(_analysis)}/logs/vis_mea.log"
         params:
             kinaselib_dir = f"{adir(_analysis)}/KinaseLib",
+            log_dir = adir(_analysis),
             analysis_type = aupper(_analysis),
-            rmd_output_dir = f"{adir(_analysis)}/KinaseLib",
-            render_dir = render_tmp_dir(_analysis, "vis_mea"),
-            rmd_finder = _rmd_finder
+            render_dir = render_tmp_dir(_analysis, "vis_mea")
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs {params.render_dir:q}
-            Rscript -e "{params.rmd_finder}
-            rmarkdown::render(rmd_path, output_file='Analysis_MEA.html',
-                output_dir='{params.rmd_output_dir}', knit_root_dir=getwd(),
-                intermediates_dir='{params.render_dir}',
-                output_format = bookdown::html_document2(toc=TRUE, toc_float=TRUE, code_folding='hide'),
-                params=list(kinaselib_dir='{params.kinaselib_dir}',
-                analysis_type='{params.analysis_type}'))" 2>&1 | tee {log:q}
+            mkdir -p {params.log_dir:q}/logs {params.render_dir:q}
+            bash {input.wrapper:q} render \
+                --report Analysis_MEA.Rmd \
+                --output_file Analysis_MEA.html \
+                --output_dir {params.kinaselib_dir:q} \
+                --intermediates_dir {params.render_dir:q} \
+                objects_rds={input.objects:q} \
+                analysis_type={params.analysis_type:q} 2>&1 | tee {log:q}
             rm -rf {params.render_dir:q}
             """
 
 # ============================================================
-# KinaseLib GSEA Analysis (one rule per analysis type)
-# Uses prophosqua::Analysis_KinaseLibrary.Rmd vignette
-# Uses combined PTM_results.xlsx with consistent column names
+# KinaseLib GSEA: compute, then report (one pair per analysis type)
 # ============================================================
 for _analysis in ANALYSIS_TYPES:
-    _rmd_finder = rmd_path_r_code("Analysis_KinaseLibrary.Rmd")
-    _rmd_template = get_prophosqua_vignette("Analysis_KinaseLibrary.Rmd")
+    rule:
+        name: f"compute_kinaselib_gsea_{_analysis}"
+        input:
+            wrapper = PTM,
+            script = CMD["kinaselib_gsea"],
+            prophosqua = PKG,
+            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
+            term2gene = f"{adir(_analysis)}/KinaseLib/term2gene.csv"
+        output:
+            xlsx = f"{adir(_analysis)}/KinaseLib/KinaseLib_GSEA_{aupper(_analysis)}.xlsx",
+            rds = f"{adir(_analysis)}/KinaseLib/KinaseLib_GSEA_{aupper(_analysis)}.rds"
+        log:
+            f"{adir(_analysis)}/logs/compute_kinaselib_gsea.log"
+        params:
+            sheet = ANALYSIS_SHEETS[_analysis],
+            analysis_type = aupper(_analysis),
+            output_dir = f"{adir(_analysis)}/KinaseLib",
+            log_dir = adir(_analysis),
+            min_size = GSEA_MIN_SIZE,
+            max_size = GSEA_MAX_SIZE,
+            n_perm = GSEA_N_PERM
+        shell:
+            """
+            mkdir -p {params.log_dir:q}/logs {params.output_dir:q}
+            bash {input.wrapper:q} kinaselib_gsea \
+                --xlsx_file {input.xlsx:q} \
+                --sheet {params.sheet:q} \
+                --term2gene_file {input.term2gene:q} \
+                --analysis_type {params.analysis_type:q} \
+                --output_dir {params.output_dir:q} \
+                --min_size {params.min_size} \
+                --max_size {params.max_size} \
+                --n_perm {params.n_perm} 2>&1 | tee {log:q}
+            """
+
+for _analysis in ANALYSIS_TYPES:
     rule:
         name: f"analysis_kinaselib_{_analysis}"
         input:
-            xlsx = f"{DIR_OUT}/PTM_results.xlsx",
-            term2gene = f"{adir(_analysis)}/KinaseLib/term2gene.csv",
-            template = _rmd_template
+            wrapper = PTM,
+            script = CMD["render"],
+            prophosqua = PKG,
+            template = report_template("Analysis_KinaseLibrary.Rmd"),
+            objects = f"{adir(_analysis)}/KinaseLib/KinaseLib_GSEA_{aupper(_analysis)}.rds"
         output:
             html = f"{adir(_analysis)}/KinaseLib/Analysis_KinaseLib_{aupper(_analysis)}.html"
         log:
             f"{adir(_analysis)}/logs/analysis_kinaselib.log"
         params:
-            xlsx_file = f"{DIR_OUT}/PTM_results.xlsx",
-            term2gene_file = f"{adir(_analysis)}/KinaseLib/term2gene.csv",
             analysis_type = aupper(_analysis),
-            output_dir_param = f"{adir(_analysis)}/KinaseLib",
-            rmd_output_dir = f"{adir(_analysis)}/KinaseLib",
-            min_size = GSEA_MIN_SIZE,
-            max_size = GSEA_MAX_SIZE,
-            n_perm = GSEA_N_PERM,
+            output_dir = f"{adir(_analysis)}/KinaseLib",
+            log_dir = adir(_analysis),
             final_html = f"Analysis_KinaseLib_{aupper(_analysis)}.html",
-            render_dir = render_tmp_dir(_analysis, "analysis_kinaselib"),
-            rmd_finder = _rmd_finder
+            render_dir = render_tmp_dir(_analysis, "analysis_kinaselib")
         shell:
             """
-            mkdir -p """ + adir(_analysis) + """/logs {params.render_dir:q}
-            Rscript -e "{params.rmd_finder}
-            rmarkdown::render(rmd_path, output_file='{params.final_html}',
-                output_dir='{params.rmd_output_dir}', knit_root_dir=getwd(),
-                intermediates_dir='{params.render_dir}',
-                output_format = bookdown::html_document2(toc=TRUE, toc_float=TRUE, code_folding='hide'),
-                params=list(xlsx_file='{params.xlsx_file}',
-                term2gene_file='{params.term2gene_file}',
-                analysis_type='{params.analysis_type}', output_dir='{params.output_dir_param}',
-                min_size={params.min_size}, max_size={params.max_size}, n_perm={params.n_perm}))" 2>&1 | tee {log:q}
+            mkdir -p {params.log_dir:q}/logs {params.render_dir:q}
+            bash {input.wrapper:q} render \
+                --report Analysis_KinaseLibrary.Rmd \
+                --output_file {params.final_html:q} \
+                --output_dir {params.output_dir:q} \
+                --intermediates_dir {params.render_dir:q} \
+                objects_rds={input.objects:q} \
+                analysis_type={params.analysis_type:q} \
+                output_dir={params.output_dir:q} 2>&1 | tee {log:q}
             rm -rf {params.render_dir:q}
             """
 
@@ -531,9 +765,14 @@ for _analysis in ANALYSIS_TYPES:
 # ============================================================
 rule top_index:
     input:
-        rmd = f"{SRC}/create_top_index.Rmd",
+        wrapper = PTM,
+        script = CMD["render"],
+        prophosqua = PKG,
+        template = report_template("create_top_index.Rmd"),
         # Depend on actual analysis outputs
         ptm_results = f"{DIR_OUT}/PTM_results.xlsx",
+        dpa_dpu = f"{ANALYSIS_DIRS['dpa']}/Analysis_DPA_DPU.html",
+        cf_dea = f"{ANALYSIS_DIRS['cf']}/Analysis_CorrectFirst_DEA.html",
         dpu_overview = f"{ANALYSIS_DIRS['dpu']}/Result_DPU.html",
         n_to_c = expand("{d}/Analysis_n_to_c.html", d=ANALYSIS_DIRS.values()),
         seqlogo = expand("{d}/Analysis_seqlogo.html", d=ANALYSIS_DIRS.values()),
@@ -546,14 +785,17 @@ rule top_index:
         f"{DIR_OUT}/logs/top_index.log"
     params:
         folder = DIR_OUT,
-        rmd_output_dir = DIR_OUT
+        render_dir = render_tmp_dir("all", "top_index")
     shell:
         """
-        mkdir -p {DIR_OUT}/logs
-        Rscript -e "rmarkdown::render('{input.rmd:q}', output_dir='{params.rmd_output_dir}', \
-            knit_root_dir=getwd(), \
-            params=list(folder='{params.folder}'))" 2>&1 | tee {log:q}
-        mv {params.rmd_output_dir}/create_top_index.html {output.html:q}
+        mkdir -p {DIR_OUT}/logs {params.render_dir:q}
+        bash {input.wrapper:q} render \
+            --report create_top_index.Rmd \
+            --output_file index.html \
+            --output_dir {params.folder:q} \
+            --intermediates_dir {params.render_dir:q} \
+            folder={params.folder:q} 2>&1 | tee {log:q}
+        rm -rf {params.render_dir:q}
         """
 
 # ============================================================
@@ -635,6 +877,8 @@ PTM Analysis Pipeline
 
 MAIN TARGETS:
   all              Full pipeline
+  data             Everything that computes and writes data
+  reports          Everything that renders HTML from that data
   zip              Zip output folder (runs full pipeline first)
   dea              Generate base Excel files (DPA, DPU, CF)
   combine          Create combined PTM_results.xlsx/rds
@@ -655,8 +899,12 @@ USAGE:
   snakemake --lint        # Check workflow
 
 CONFIG:
-  Edit config.yaml to change settings
+  Edit ptm_config.yaml to change settings
 
-OUTPUT:
-  Results go to: {DIR_OUT}/
-        """)
+ANALYSIS CODE:
+  Every rule calls ./ptm.sh <command>, the wrapper from prophosqua's
+  inst/application/bin, which resolves the command's R script from the install
+  path. This project holds no R code. Run ./ptm.sh help for the commands. To
+  change behaviour, edit prophosqua and reinstall:
+      make -C <prophosqua checkout> install
+""")

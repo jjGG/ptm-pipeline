@@ -1,5 +1,43 @@
 # ptm-pipeline 0.3.0
 
+- A project directory now holds no R code at all: `template/src/` is gone, and with it the
+  seven scripts and report templates every project used to carry. Every rule calls
+  `ptm.sh <command>` -- one wrapper from the installed prophosqua, which resolves the
+  command's `CMD_*.R` from the install path. There is nothing left in a working directory
+  that an edit can be lost from, and one place -- prophosqua -- where the analysis lives.
+  `ptm-pipeline update` places `ptm.sh` in the project so the same steps can be run by
+  hand, and deletes both a `src/` and the per-command `ptm_*.sh` wrappers of a project
+  initialised before the move. `./ptm.sh help` lists the steps, read from the
+  installation, so it cannot fall behind the package.
+- No rule embeds R code any more. The seven `Rscript -e "rmarkdown::render(...)"` blocks and
+  the generated `rmd_finder` snippet are replaced by `ptm.sh render`, which takes the
+  report name and its parameters as arguments. `helpers.py` lost `get_prophosqua_vignette()` and
+  `rmd_path_r_code()` and gained `get_prophosqua_file()`, which resolves any installed
+  script, template or wrapper.
+- Computing and reporting are separate rules, so a caption fix no longer costs a
+  reanalysis. `analysis_dea` became `compute_dpa_dpu` plus `report_dpa_dpu`; `cf_dea` became
+  `compute_cf_dea` plus `report_cf_dea` (about 15 seconds instead of about 85, with no
+  downstream cascade); and the three enrichment reports each gained a compute rule.
+- The documentation site gained a workflow diagram and a section on what the pipeline adds
+  to the DEA results it reads -- the DPA table is the site-level DEA result with its
+  protein-level counterpart joined alongside, and the diagram says which steps compute data,
+  which render HTML, and which of them run once per analysis type. The diagram is a mermaid
+  fence, so it renders both on the Pages site and in the file view on GitHub.
+- Two new targets name the tiers: `snakemake -j1 data` builds everything that writes data,
+  `snakemake -j1 reports` everything that renders HTML from it.
+- The enrichment result workbooks and RDS files -- PTM-SEA, kinase-library GSEA and MEA, six
+  files per analysis type -- are declared rule outputs at last. They were written from inside
+  a conditional chunk of a report and could not be declared, so a failed or empty enrichment
+  left the previous run's workbook in place looking current.
+- Reinstalling prophosqua now invalidates every rule that runs R. Each such rule declares
+  the installed package's `Meta/package.rds`, which `R CMD INSTALL` rewrites, alongside the
+  wrapper and script it names -- the work a script does happens in the package's R code,
+  which is none of the files the rule used to name. A full rerun after a reinstall is the
+  price of never again seeing a report that is up to date and wrong.
+- `ptm_config.yaml` no longer carries a `src` key; nothing reads it. Existing config files
+  keep working, the key is simply ignored. `ptm-pipeline validate` checks that the installed
+  prophosqua ships the wrappers instead of checking for a `src/` directory.
+
 - Stop shipping `src/dea_utils.R` and `src/feature_preparation.R` into every project. Their
   functions are now prophosqua exports, documented and tested there. A project no longer
   carries a copy that can drift from the package or shadow it, and the reports call the

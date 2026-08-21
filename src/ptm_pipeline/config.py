@@ -59,9 +59,6 @@ def generate_config(
         dir_out = f"PTM_{date.today().strftime('%Y%m%d')}"
 
     return {
-        # Source directory
-        "src": "src",
-
         # Output configuration
         "dir_out": dir_out,
         "max_fig": max_fig,
